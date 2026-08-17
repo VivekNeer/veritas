@@ -44,7 +44,7 @@ full breakdown in [`ASSUMPTIONS.md` D-15](ASSUMPTIONS.md).
 ---
 
 ## Architecture Summary
-
+Architecture Presentation: [Google Slides Presentation](https://docs.google.com/presentation/d/1PSQgC79A32b5MLFcEBq_UUoT5sYkeWS3/edit?slide=id.p1#slide=id.p1)
 <img src="docs/architecture_diagram.svg" alt="Veritas Claims solution architecture: GCS bucket into ingestion, a four-stage transform driven by config/*.yaml, BigQuery storage split into standardised_records and dead_letter, and a Streamlit ops UI reading from BigQuery." width="100%">
 
 Three decisions shape the design: schema-on-read at ingestion with schema-on-write at the
