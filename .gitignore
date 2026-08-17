@@ -23,3 +23,5 @@ Thumbs.db
 # --- local run artifacts ---
 *.log
 .pytest_cache/
+local_warehouse.db
+*.db
