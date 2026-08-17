@@ -66,8 +66,8 @@ Full detail: [`docs/architecture_narrative.md`](docs/architecture_narrative.md).
 
 ### Install
 ```bash
-git clone <REPO_URL>
-cd veritas-claims-pipeline
+git clone https://github.com/VivekNeer/veritas.git
+cd veritas
 python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env
