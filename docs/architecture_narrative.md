@@ -1,7 +1,6 @@
 # Solution Architecture
 
 Veritas Claims — Medical Data Standardisation Pipeline
-`[VERIFY]` markers indicate items to confirm against the finished code before submission.
 
 ---
 
@@ -142,9 +141,12 @@ implemented `[ASSUMPTIONS.md S-3]`.
 give fault tolerance and idempotency. Availability derives from the managed services;
 the local prototype makes no availability claim.
 
-**Data quality and governance.** Measured coverage against the supplied samples is
-`[VERIFY: ~99%]` of clinical rows resolved to canonical names, against NFR-4.1's 98%
-target. The production loop that sustains it: unresolved names accumulate in the review
+**Data quality and governance.** Measured coverage against the supplied samples is 94.2%
+of clinical rows resolved to canonical names (262/278 across the five files: 255 exact, 3
+fuzzy, 2 embedded-extraction, 2 derived-compound), against NFR-4.1's 98% target. The 16
+unresolved rows are, on inspection, all panel-header strings carrying misattributed real
+values — a genuine upstream defect, correctly retained and queued rather than guessed at.
+The production loop that sustains coverage over time: unresolved names accumulate in the review
 queue with their nearest candidate and score, ops updates the dictionary, affected
 records are reprocessed. At larger variant volumes, Vertex AI text embeddings would
 replace string similarity as the second tier — the output schema already records method
@@ -191,4 +193,9 @@ brief's thresholds is the remaining step `[ASSUMPTIONS.md S-5]`.
 
 ---
 
-*Diagram: see `docs/architecture_diagram.png` and the accompanying slides.*
+*Diagram: `docs/architecture_diagram.svg` (solution architecture — sources through
+ingestion, the four-stage transform, storage, and the ops UI, with config-driven and
+error paths called out). The brief's stated preference for a Draw.io diagram exported into
+a Google Slides deck with speaker notes is a manual step outside this repo's scope — the
+SVG here is the submitted diagram; building the Slides version is still worth doing before
+the panel review if time allows.*

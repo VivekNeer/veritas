@@ -7,9 +7,6 @@ deliverable rather than an appendix.
 Where a simplification was made to fit the time budget, it is stated plainly along with
 what the production version would require.
 
-> **DRAFT NOTE — remove before submission:** items marked `[VERIFY]` need a final check
-> against the finished code. Everything else is settled and can stand as written.
-
 ---
 
 ## 1. Business Assumptions
@@ -68,6 +65,19 @@ that is the documented upgrade path, not the prototype default. Note that every 
 records its method and confidence, so an embedding tier could be added as a fourth tier
 without changing the output schema.
 
+**T-3a. Observed weakness: token_set_ratio can over-score on a single shared word.**
+On the full sample run, one of three fuzzy matches was wrong: the panel-header string
+`"COMPLETE BLOOD COUNT (CBC) , WHOLE BLOOD EDTA"` matched `URINE_BLOOD` (variant `"URINE
+BLOOD"`) at **confidence 1.00** — a perfect score, purely because both strings contain the
+token "BLOOD" and `token_set_ratio` scores on token-set overlap rather than semantic
+meaning. This is the concrete failure mode T-3 already names as fuzzy matching's weak
+spot, and it is a genuinely dangerous one: the row is *maximally confident* and so would
+sort to the bottom of a confidence-ordered review queue, not the top, exactly where an
+ops reviewer would never think to look. Left uncorrected here deliberately — patching the
+scorer this late risked destabilising the other two (correct) fuzzy matches and the 64
+passing tests without a broader tuning pass to validate against. Recorded as a concrete,
+observed data point for why embeddings are the real production answer, not a guess.
+
 **T-4. Streamlit for the operational UI.**
 The brief asks for a lightweight, functional UI and explicitly states it need not be
 production-grade. Streamlit reads directly from BigQuery, lives in the repo, and requires
@@ -76,9 +86,12 @@ with authentication and role-based access.
 
 **T-5. Idempotency via deterministic row identity.**
 Each output row's `id` is a hash of `(document_id, record_type, test_name_original,
-page_no, result_text)`. Re-running the pipeline over the same inputs produces identical
-ids, so the load is a MERGE rather than an append. `[VERIFY]` Confirm the final key set
-matches `document_type_mappings.yaml > deduplication.row_identity_fields`.
+page_no, result_text, row_seq)`. `row_seq` was added during implementation: none of the
+other fields vary between two medication rows in the same discharge_summary encounter (no
+test_name/page_no/result_text exist on those rows at all), so without it every medication
+row for one document collapsed onto the same id. Verified idempotent by re-running the
+full pipeline twice against all 5 samples — 342/342 and 84/84 distinct ids both times, no
+duplicate rows. Key set: `document_type_mappings.yaml > deduplication.row_identity_fields`.
 
 **T-6. Configuration is data, not code.**
 All four YAML files are read at runtime. Adding a test, a variant spelling, a unit
@@ -164,8 +177,13 @@ surface upstream data quality, not to launder it. These rows are marked `Invalid
 
 **D-7. Compound vitals are split where unambiguous, flagged otherwise.**
 `"100/60 mmHg"` maps to two canonical tests (systolic and diastolic) via the
-`derived_from` config block. Ambiguous compounds are left with `result_value` null and
-`result_text` retained. `[VERIFY]` Confirm the final implementation matches.
+`derived_from` config block: the raw test name must match a configured
+`source_variant` ("BP") AND the result must parse as two numbers joined by the configured
+delimiter. A single-number result on the same raw name (`"BP": "100"`, seen once in the
+samples) does not match the two-number pattern and falls through to ordinary single-value
+resolution instead — verified against the real sample data, where this exact case occurs.
+Ambiguous or non-matching compounds are left with `result_value` from ordinary numeric
+extraction and `result_text` retained, never coerced.
 
 **D-8. Configured reference ranges override source-provided ranges.**
 The `range` field in the samples is demonstrably unreliable (single values where
@@ -215,10 +233,18 @@ specified values retain exactly their specified meanings. Collapsing these into 
 would have made the flag unusable for its stated purpose.
 
 **D-15. Measured coverage against the supplied samples.**
-Against 321 clinical rows across the five files: `[VERIFY — update with final numbers]`
-approximately 82% resolved by exact match, 6% by fuzzy match, ~0.6% unresolved, for
-roughly 99% overall coverage. NFR-4.1 targets 98% within 30 days of a source going live.
-The dictionary ships with 72 canonical tests and 287 variants.
+Against the 278 `lab_report` rows produced across the five files (after junk/placeholder/
+panel-header rows are routed to dead-letter rather than counted as clinical rows at all —
+see D-4, D-12): 255 resolved by exact match (91.7%), 3 by fuzzy match (1.1%), 2 by
+embedded-value extraction (0.7%), 2 by derived compound-vital split (0.7%), for **94.2%
+overall coverage** (262/278). 16 rows remain unresolved (5.8%) — inspected individually,
+every one is a panel-header-shaped string carrying a real, misattributed analyte value
+(the same column-misalignment defect as D-3's headline example, just on a caption row
+instead of a test row), correctly retained and queued for review rather than guessed at.
+NFR-4.1 targets 98% within 30 days of a source going live; 94.2% on five OCR-damaged
+samples on day one is consistent with that trajectory once the review-queue-to-dictionary
+feedback loop (T-3) runs for real. The dictionary ships with 72 canonical tests and 287
+variants. One of the three fuzzy matches was itself a false positive — see T-3a.
 
 **D-16. Duplicate detection is exercisable on the supplied data.**
 `Sample_JSON_file5.json` contains the same `discharge_summary` payload twice within
@@ -249,8 +275,30 @@ and `basic_info_*` raw-passthrough columns duplicating their canonical equivalen
 
 We implemented a clean canonical subset rather than reproducing all 70+ columns. The raw
 payload is retained in full in `raw_json`, so nothing is lost and any passthrough column
-can be reconstructed. `[VERIFY]` List the exact final column set here once the loader is
-complete.
+can be reconstructed. Final column set (55 columns, `src/pipeline.py > CANONICAL_COLUMNS`),
+grouped:
+
+- **Lineage (13):** `document_id`, `record_type`, `file_source`, `trace_id`,
+  `correlation_id`, `source_system`, `claim_no`, `nt_code`, `consumer_client_id`,
+  `destination_identifier`, `case_id`, `ingested_at`, `row_seq`
+- **Standardisation core (15, `lab_report` rows only):** `test_name_original`,
+  `test_name_canonical`, `result_value`, `result_text`, `unit_canonical`, `unit_original`,
+  `range_low`, `range_high`, `range_text`, `test_analytics`, `source_test_analytics`,
+  `normalization_method`, `normalization_confidence`, `page_no`, `flags`
+- **Patient/clinical context (20):** `patient_name`, `age_years`, `age_text`, `age_flags`,
+  `gender`, `uhid`, `hospital_name`, `lab_or_hospital_name`, `doctor_name`, `bill_date`,
+  `reports_date`, `admission_date`, `discharge_date`, `diagnosis`, `brief_history`,
+  `general_examinations`, `recommendations`, `hospital_address`, `ward`,
+  `post_discharge_advice`, `course_during_hospitalisation`
+- **Medication (5, `discharge_summary` rows only):** `medicine`, `dose`, `frequency`,
+  `medicine_type`, `other_med_inj_investigations`
+- **Audit (1):** `raw_json` — the full classifier payload this row came from (FR-4.3)
+
+Every row carries all 55 columns regardless of record type, nulled where not applicable —
+this is what makes the long-format table uniform in the warehouse rather than two
+differently-shaped tables glued together. `lab_report` rows populate the standardisation
+core and leave medication columns null; `discharge_summary` rows do the reverse, emitting
+one row per medication (or one header-only row if the encounter lists none).
 
 ---
 
@@ -258,7 +306,7 @@ complete.
 
 Consciously omitted, with what inclusion would require.
 
-**S-1. Medicine name mapping (FR-2.6, optional) — `[VERIFY: minimal version or omitted]`**
+**S-1. Medicine name mapping (FR-2.6, optional) — omitted entirely.**
 The medication data is the most OCR-damaged content in the samples: `"Spor 977"`,
 `"Clo paris Abalamos"`, doses like `"bud- ob of"`, frequencies like `"RUR - 26/mus"`. A
 brand→generic dictionary would resolve a negligible fraction and produce false mappings

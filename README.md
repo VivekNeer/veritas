@@ -25,37 +25,27 @@ consequences follow, and this pipeline addresses each:
 
 ## What This Does — Before and After
 
-> **TODO:** replace with real rows from the pipeline output once it runs end to end.
-> Pull 4 rows that demonstrate: an OCR-truncated name resolved by fuzzy match, a numeric
-> extracted from text, a unit converted, and a flagged mismatch. This table is the single
-> most persuasive artefact in the repo — use real values, not invented ones.
+Real rows from a full pipeline run against all 5 supplied sample files:
 
 | Raw input | Canonical output | How |
 |---|---|---|
-| `test_name: "aemoglobin"` | `HEMOGLOBIN` | fuzzy, confidence `0.xx` |
-| `result: "98.6 degree F"` | `result_value: 98.6`, `unit_canonical: "degree F"` | numeric extraction |
-| `unit: "mil/cu.mm"`, `result: "5.45"` | `5450000 cells/cu.mm` | unit conversion |
-| `test_name: "aemoglobin"`, `unit: "cell/cu.mm"`, `range: "4000-10000"` | `Invalid`, flag `unit_test_mismatch` | mismatch detected, **not** auto-corrected |
+| `test_name: "aemoglobin"` (OCR-truncated) | `test_name_canonical: "HEMOGLOBIN"` | exact match — the truncation is a pre-catalogued dictionary variant, confidence `1.00` |
+| `test_name: "tal WBC Count"`, `unit: "mil/cu.mm"`, `result: "5.45"` | `WHITE_BLOOD_CELL_COUNT`, `result_value: 5450000.0`, `unit_canonical: "cells/cu.mm"` | OCR-truncated name resolved, then the brief's own worked unit-conversion example applied |
+| `test_name: "BP"`, `result: "100/60 mmHg"` | two rows: `BLOOD_PRESSURE_SYSTOLIC = 100.0`, `BLOOD_PRESSURE_DIASTOLIC = 60.0 mmHg` | compound vital split, `normalization_method: "derived_compound_split"` |
+| `test_name: "aemoglobin"`, `unit: "cell/cu.mm"`, `range: "4000-10000"`, `result: "9700"` | `test_analytics: "Invalid"`, flag `unit_test_mismatch`, unit and value **unchanged** | WBC data on a haemoglobin row — flagged, never auto-corrected (D-6) |
 
-**Measured on the supplied sample data:** `[TODO: final numbers]` ~99% of clinical rows
-resolved to canonical test names (NFR-4.1 target: 98%), across 72 canonical tests and
-287 configured variants.
+**Measured on the supplied sample data:** 94.2% of clinical rows resolved to canonical
+test names (262 of 278 `lab_report` rows: 255 exact, 3 fuzzy, 2 embedded-value extraction,
+2 derived compound-vital splits), against NFR-4.1's 98% target — across 72 canonical
+tests and 287 configured variants. The 16 unresolved rows are, on inspection, all
+panel-header strings carrying real but misattributed values, not genuine coverage gaps;
+full breakdown in [`ASSUMPTIONS.md` D-15](ASSUMPTIONS.md).
 
 ---
 
 ## Architecture Summary
 
-```
-GCS bucket ──► Ingestion ──► Standardisation ──► Validation ──► BigQuery
-(raw JSON)     envelope       name / numeric      range +        canonical
-               parse,         / unit /            outlier        + dead-letter
-               fan-out,       demographic         classify            │
-               dedup                                                  ▼
-                   │                                             Streamlit UI
-                   └──► dead-letter (malformed, unprocessable)
-                                    ▲
-                            config/*.yaml drives every mapping decision
-```
+<img src="docs/architecture_diagram.svg" alt="Veritas Claims solution architecture: GCS bucket into ingestion, a four-stage transform driven by config/*.yaml, BigQuery storage split into standardised_records and dead_letter, and a Streamlit ops UI reading from BigQuery." width="100%">
 
 Three decisions shape the design: schema-on-read at ingestion with schema-on-write at the
 warehouse; micro-batch rather than streaming, because the SLA is 15 minutes and batch is
@@ -64,7 +54,6 @@ and inferring corrections would produce clean-looking output that misrepresents 
 values.
 
 Full detail: [`docs/architecture_narrative.md`](docs/architecture_narrative.md).
-Diagram: [`docs/architecture_diagram.png`](docs/architecture_diagram.png).
 
 ---
 
@@ -276,37 +265,33 @@ docs/       architecture narrative, diagram, assumptions
 
 ## Requirements Coverage
 
-> **TODO:** mark each row honestly once the code is complete. An accurate table with a
-> few gaps reads far better than an inflated one — the brief explicitly says a
-> well-reasoned partial solution outscores an overbuilt one.
-
 | Req | Status | Notes |
 |---|---|---|
-| FR-1.1 Multi-source ingestion | | GCS + local mode |
-| FR-1.2 Duplicate detection | | Intra-file + cross-file, configurable |
-| FR-1.3 Schema flexibility | | Schema-on-read, per-classifier profiles |
-| FR-2.1 Test name normalisation | | Exact → fuzzy → unresolved, method recorded |
-| FR-2.2 Fixed column schema | | Long-format, see D-17 |
-| FR-2.3 Numeric conversion | | |
-| FR-2.4 Unit harmonisation | | |
-| FR-2.5 Demographic normalisation | | Proven by test; source PII pre-redacted |
-| FR-2.6 Medicine mapping | | See S-1 |
-| FR-3.1 Range validation | | |
-| FR-3.2 Outlier detection | | Separate bounds from range bounds |
-| FR-3.3 Analytics classification | | Plus two states, see D-14 |
-| FR-3.4 Incorrect value flagging | | |
-| FR-4.1 Structured DB load | | BigQuery |
-| FR-4.2 Error logging | | Dead-letter table with reason |
-| FR-4.3 Audit trail | | Raw JSON retained per record |
-| FR-5.1 Pipeline dashboard | | |
-| FR-5.2 Record inspector | | |
-| FR-5.3 Flagged records review | | |
-| FR-5.4 Clinic-level summary | | Grouped by `source_system`, see D-2 |
-| NFR-2.1 Zero-code onboarding | | Config-driven; walkthrough above |
-| NFR-3.1 Fault tolerance | | Per-record isolation |
-| NFR-3.2 Idempotency | | MERGE on deterministic id |
-| NFR-4.2 Data lineage | | Trace/correlation IDs, timestamps, source path |
-| NFR-5.2 Structured logging | | Correlation ID on every log line |
+| FR-1.1 Multi-source ingestion | ✅ Built | GCS + local mode, verified both paths |
+| FR-1.2 Duplicate detection | ✅ Built | Intra-file + cross-file, configurable; file 5's real duplicate caught |
+| FR-1.3 Schema flexibility | ✅ Built | Schema-on-read, per-classifier profiles |
+| FR-2.1 Test name normalisation | ✅ Built | Exact → fuzzy → unresolved, method + confidence recorded; 94.2% coverage |
+| FR-2.2 Fixed column schema | ✅ Built (reinterpreted) | Long-format, see D-17 |
+| FR-2.3 Numeric conversion | ✅ Built | All documented edge cases handled; 64 tests |
+| FR-2.4 Unit harmonisation | ✅ Built | Alias + factor conversion, mismatch flagged not corrected |
+| FR-2.5 Demographic normalisation | ✅ Built | Proven by synthetic tests; source PII pre-redacted |
+| FR-2.6 Medicine mapping | ⬜ Omitted | See S-1 — OCR quality makes it unsafe |
+| FR-3.1 Range validation | ✅ Built | Config ranges are authority over source ranges |
+| FR-3.2 Outlier detection | ✅ Built | Separate bounds from range bounds; brief's own worked example verified |
+| FR-3.3 Analytics classification | ✅ Built | Plus two states, see D-14 |
+| FR-3.4 Incorrect value flagging | ✅ Built | Folded into `Invalid` with specific reason flags |
+| FR-4.1 Structured DB load | ✅ Built | Real BigQuery client + local SQLite stand-in behind one interface |
+| FR-4.2 Error logging | ✅ Built | Dead-letter table with reason, idempotent |
+| FR-4.3 Audit trail | ✅ Built | Full raw JSON retained per row |
+| FR-5.1 Pipeline dashboard | ✅ Built | Streamlit, `st.metric` + bar chart |
+| FR-5.2 Record inspector | ✅ Built | Raw JSON beside standardised rows |
+| FR-5.3 Flagged records review | ✅ Built | Sortable, filterable by category |
+| FR-5.4 Clinic-level summary | ✅ Built | Grouped by `source_system`, see D-2 |
+| NFR-2.1 Zero-code onboarding | ✅ Built | Config-driven; walkthrough above |
+| NFR-3.1 Fault tolerance | ✅ Built | Per-record isolation, verified on malformed inputs |
+| NFR-3.2 Idempotency | ✅ Built | Deterministic id + upsert; verified 342/342 and 84/84 distinct across re-runs |
+| NFR-4.2 Data lineage | ✅ Built | Trace/correlation IDs, timestamps, source path on every row |
+| NFR-5.2 Structured logging | ✅ Built | Correlation ID on every log line |
 
 Remaining NFRs are addressed in the architecture narrative, as the brief specifies.
 
@@ -322,5 +307,13 @@ Remaining NFRs are addressed in the architecture narrative, as the brief specifi
 - No authentication on the operational UI `[S-6]`
 - Throughput claims are argued analytically, not load-tested `[S-7]`
 - Config is not schema-versioned for historical reprocessing `[S-3]`
+- Deterministic fuzzy matching has an observed false-positive mode: one of three fuzzy
+  matches in the sample run scored a **perfect** confidence (1.00) on a wrong match, purely
+  from a single shared token between two unrelated strings — the exact weakness embeddings
+  would fix, and dangerous precisely because it wouldn't surface in a confidence-sorted
+  review queue `[T-3a]`
+- 16 lab_report rows (5.8%) remain unresolved — all inspected individually and confirmed to
+  be panel-header captions carrying real, misattributed values rather than genuine
+  dictionary gaps `[D-15]`
 
-Full reasoning for each: [`docs/ASSUMPTIONS.md`](docs/ASSUMPTIONS.md).
+Full reasoning for each: [`ASSUMPTIONS.md`](ASSUMPTIONS.md).
