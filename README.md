@@ -72,39 +72,138 @@ Diagram: [`docs/architecture_diagram.png`](docs/architecture_diagram.png).
 
 ### Prerequisites
 - Python 3.10+
-- A GCP project with billing enabled
-- `gcloud` CLI authenticated
+- A Google account (a GCP project with billing enabled is only needed for the
+  optional real-cloud path below — everything runs locally without one)
 
 ### Install
 ```bash
 git clone <REPO_URL>
 cd veritas-claims-pipeline
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+cp .env.example .env
 ```
 
-### GCP resources
-```bash
-# TODO: confirm these match what you actually created
-export GCP_PROJECT_ID="your-project"
-export GCS_BUCKET="veritas-claims-raw-<suffix>"
-export BQ_DATASET="veritas_claims"
+### Run locally — no GCP required
+The default `.env` values (`LOCAL_MODE=true`, `STORAGE_BACKEND=sqlite`) read
+JSON from `sample-data/` and write to a local `local_warehouse.db` SQLite
+file with the identical schema BigQuery would use. This is the fastest way
+to verify the pipeline and is what every number in this README was measured
+against.
 
+```bash
+python -m src.pipeline    # runs the pipeline end to end
+streamlit run ui/app.py   # operational UI, reads local_warehouse.db
+pytest                    # unit tests
+```
+
+---
+
+### Optional: pointing at real GCP
+
+The architecture is designed for GCS + BigQuery (see `docs/architecture_narrative.md`);
+local SQLite is a disclosed stand-in for development, not a replacement. To
+run against the real thing:
+
+**1. Install the gcloud CLI** (skip if already installed)
+Follow https://cloud.google.com/sdk/docs/install for your OS, then:
+```bash
+gcloud init
+```
+This walks you through logging into your Google account and picking or
+creating a project interactively.
+
+**2. Create (or select) a GCP project**
+```bash
+gcloud projects create veritas-claims-demo --name="Veritas Claims Demo"
+gcloud config set project veritas-claims-demo
+```
+A project needs billing enabled to use GCS/BigQuery beyond the always-free
+tier — attach a billing account in the Console
+(`https://console.cloud.google.com/billing`) if this is a fresh project.
+At the volume of this assignment (5 sample files, a few hundred rows),
+actual spend is effectively $0 — GCS and BigQuery both have generous free
+tiers (5GB storage, 1TB queries/month).
+
+**3. Enable the two APIs this project uses**
+```bash
+gcloud services enable storage.googleapis.com bigquery.googleapis.com
+```
+
+**4. Authenticate the pipeline's Python client libraries**
+```bash
 gcloud auth application-default login
-gsutil mb -p $GCP_PROJECT_ID gs://$GCS_BUCKET
-bq --location=<REGION> mk --dataset $GCP_PROJECT_ID:$BQ_DATASET
-gsutil -m cp -r sample-data/* gs://$GCS_BUCKET/
+```
+This opens a browser login and stores credentials where
+`google-cloud-storage` / `google-cloud-bigquery` look for them automatically
+— no service account JSON key needed for local development.
+
+**5. Create the GCS bucket**
+Bucket names are globally unique across all of GCP, so pick a suffix (your
+project ID is a safe default):
+```bash
+export GCP_PROJECT_ID="veritas-claims-demo"
+export GCS_BUCKET="veritas-claims-raw-${GCP_PROJECT_ID}"
+
+gcloud storage buckets create gs://$GCS_BUCKET \
+  --project=$GCP_PROJECT_ID \
+  --location=US \
+  --uniform-bucket-level-access
 ```
 
-Copy `.env.example` to `.env` and fill in the values. `.env` is gitignored; no
-credentials are committed.
-
-### Run
+**6. Upload the sample files**
 ```bash
-python -m src.pipeline                 # full pipeline against GCS
-LOCAL_MODE=true python -m src.pipeline # against sample-data/ locally
-streamlit run ui/app.py                # operational UI
-pytest                                 # tests
+gcloud storage cp sample-data/*.json gs://$GCS_BUCKET/
+```
+The pipeline's GCS reader lists every `.json` blob in the bucket — no
+folder structure is required for this dataset (see ASSUMPTIONS.md D-1 on
+why there's no per-clinic prefixing here).
+
+**7. Create the BigQuery dataset**
+```bash
+bq --location=US mk --dataset ${GCP_PROJECT_ID}:veritas_claims
+```
+The two tables inside it (`standardised_records`, `dead_letter`) are
+created automatically by the pipeline on first run — nothing to do here.
+
+**8. Point the pipeline at it**
+Edit `.env`:
+```bash
+LOCAL_MODE=false
+STORAGE_BACKEND=bigquery
+GCP_PROJECT_ID=veritas-claims-demo
+GCS_BUCKET=veritas-claims-raw-veritas-claims-demo
+BQ_DATASET=veritas_claims
+BQ_LOCATION=US
+```
+Or run one-off without editing `.env`:
+```bash
+LOCAL_MODE=false STORAGE_BACKEND=bigquery python -m src.pipeline
+```
+You can also mix the two — e.g. `LOCAL_MODE=true STORAGE_BACKEND=bigquery`
+reads from `sample-data/` locally but writes to real BigQuery, which is a
+convenient way to sanity-check the BigQuery path without re-uploading files
+every time you change something.
+
+**9. Verify**
+```bash
+bq query --use_legacy_sql=false \
+  'SELECT test_analytics, COUNT(*) FROM veritas_claims.standardised_records GROUP BY 1'
+```
+Point the Streamlit UI at the same `.env` and it reads from BigQuery
+instead of SQLite with no code change — the UI talks to whichever backend
+`STORAGE_BACKEND` selects.
+
+**No code changes are required at any point in this section.** The
+LOCAL_MODE / STORAGE_BACKEND split was built specifically so switching
+between local development and real GCP is purely an environment-variable
+change — see `src/storage/bigquery_loader.py` for the two backends behind
+one interface.
+
+**Tearing it down** (avoid stray billing on an otherwise-idle project):
+```bash
+gcloud storage rm -r gs://$GCS_BUCKET
+bq rm -r -d ${GCP_PROJECT_ID}:veritas_claims
 ```
 
 ---
