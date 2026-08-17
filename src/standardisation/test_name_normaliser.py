@@ -44,23 +44,28 @@ class TestNameNormaliser:
 
     # ------------------------------------------------------------------ setup
     def _build_indices(self) -> None:
+        # Variants are run through the SAME preprocessing as incoming names
+        # before indexing. Several dictionary variants (e.g. "PUS
+        # CELLS(light microscopy)/hpf") literally contain a method
+        # annotation that preprocessing strips from raw input — without
+        # preprocessing the variant too, an exact match could never fire.
         self.clinical_lookup: dict[str, str] = {}
         self.clinical_units: dict[str, str] = {}
         for canonical, spec in self.config["tests"].items():
             for variant in spec["variants"]:
-                self.clinical_lookup[variant.lower()] = canonical
+                self.clinical_lookup[self.preprocess(variant).lower()] = canonical
             self.clinical_units[canonical] = spec.get("canonical_unit")
 
         self.qualitative_lookup: dict[str, str] = {}
         for canonical, spec in self.config.get("qualitative_tests", {}).get("tests", {}).items():
             for variant in spec["variants"]:
-                self.qualitative_lookup[variant.lower()] = canonical
+                self.qualitative_lookup[self.preprocess(variant).lower()] = canonical
 
         self.narrative_set: set[str] = set()
         narrative_cfg = self.config.get("narrative_tests", {})
         for key in ("variants", "symptoms", "nursing_chart"):
             for v in narrative_cfg.get(key, []):
-                self.narrative_set.add(v.lower())
+                self.narrative_set.add(self.preprocess(v).lower())
 
         # combined pool for fuzzy matching: variant_lower -> (canonical, catalog)
         self.fuzzy_pool: dict[str, tuple[str, str]] = {}

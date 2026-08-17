@@ -83,12 +83,18 @@ deduplication:
     on_conflict: skip          # skip | overwrite | version
 
   # Row-grain key for the long-format output (one row per test result).
+  # row_seq is a synthetic per-record ordinal (position of this row within
+  # its parent document+record_type), appended as a disambiguator: discharge
+  # summary medication rows carry no test_name/page_no/result_text at all,
+  # so without it every medication row for one encounter would collide onto
+  # the same id. See ASSUMPTIONS.md T-5.
   row_identity_fields:
     - document_id
     - record_type
     - test_name_original
     - page_no
     - result_text
+    - row_seq
 
 # -----------------------------------------------------------------------------
 # PROFILE: lab_report

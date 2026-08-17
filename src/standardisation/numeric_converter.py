@@ -112,6 +112,18 @@ def is_template_placeholder_row(row: dict, junk_cfg: dict) -> bool:
     return False
 
 
+def is_non_clinical_string_row(raw_test_name: str | None, junk_cfg: dict) -> bool:
+    """Catches OCR bleed from letterheads, footers, and adjacent columns
+    landing directly in the test_name field — e.g. "lac/cmm" (a unit
+    string), "NEGATIVE" / "ABSENT" (a result, not a name), or a lab's
+    marketing tagline. These are junk rows, not unresolved test names, and
+    must not be counted against NFR-4.1's coverage target."""
+    if not raw_test_name:
+        return False
+    known = {s.lower() for s in junk_cfg.get("non_clinical_strings", [])}
+    return raw_test_name.strip().lower() in known
+
+
 def detect_compound_vital(raw_test_name: str, raw_result: str | None, test_dictionary: dict) -> list[tuple[str, float]] | None:
     """Rows like `test_name: "BP", result: "100/60 mmHg"` map to TWO
     canonical tests (systolic/diastolic) via `derived_from` in
