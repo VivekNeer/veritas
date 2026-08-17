@@ -50,15 +50,20 @@ logger = logging.getLogger("veritas.pipeline")
 @dataclass
 class RunSummary:
     files_processed_local_mode: bool
+    files_read: int = 0
     records_seen: int = 0
     rows_written: int = 0
     dead_letters: int = 0
     flagged: int = 0
     unresolved_test_names: int = 0
+    duplicates_suppressed: int = 0
     by_analytics: dict = field(default_factory=dict)
     started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     finished_at: str | None = None
     backend: str | None = None
+
+    def to_dict(self) -> dict:
+        return {**self.__dict__}
 
 
 NON_FLAGGED_ANALYTICS = {"Within Range", "Not Applicable"}
@@ -117,6 +122,7 @@ class Pipeline:
         return {
             "source_file": r.source_file, "document_id": r.document_id,
             "error_reason": reason, "raw_json": str(raw_item),
+            "source_system": r.meta.get("source_system"),
             "failed_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -337,13 +343,19 @@ class Pipeline:
         source = source or os.environ.get("SAMPLE_DATA_DIR" if local_mode else "GCS_BUCKET", "sample-data")
 
         logger.info("pipeline_run_start local_mode=%s source=%s", local_mode, source)
-        raw_records, envelope_dead_letters = ingest(local_mode, source)
+        raw_records, envelope_dead_letters, ingest_stats = ingest(local_mode, source)
 
-        summary = RunSummary(files_processed_local_mode=local_mode, records_seen=len(raw_records))
+        summary = RunSummary(
+            files_processed_local_mode=local_mode,
+            files_read=ingest_stats.files_read,
+            records_seen=len(raw_records),
+            duplicates_suppressed=ingest_stats.intra_file_duplicates + ingest_stats.cross_file_duplicates,
+        )
         all_rows: list[dict] = []
         all_dead_letters: list[dict] = [
             {"source_file": dl.source_file, "document_id": dl.document_id,
-             "error_reason": dl.error_reason, "raw_json": dl.raw_json, "failed_at": dl.failed_at}
+             "error_reason": dl.error_reason, "raw_json": dl.raw_json,
+             "source_system": dl.source_system, "failed_at": dl.failed_at}
             for dl in envelope_dead_letters
         ]
 
@@ -378,11 +390,23 @@ class Pipeline:
         summary.finished_at = datetime.now(timezone.utc).isoformat()
 
         logger.info(
-            "pipeline_run_complete rows_written=%d dead_letters=%d flagged=%d unresolved=%d backend=%s",
+            "pipeline_run_complete rows_written=%d dead_letters=%d flagged=%d unresolved=%d "
+            "duplicates_suppressed=%d backend=%s",
             summary.rows_written, summary.dead_letters, summary.flagged,
-            summary.unresolved_test_names, summary.backend,
+            summary.unresolved_test_names, summary.duplicates_suppressed, summary.backend,
         )
+        self._write_run_summary(summary)
         return summary
+
+    def _write_run_summary(self, summary: RunSummary) -> None:
+        """Persisted so the UI's Dashboard tab can show run-level metrics
+        (duplicates suppressed, files read) that aren't reconstructable from
+        the warehouse tables alone — sanctioned explicitly by the brief:
+        "reading from BigQuery (or the run-summary file if BQ latency
+        annoys you)"."""
+        path = os.environ.get("RUN_SUMMARY_PATH", "run_summary.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(summary.to_dict(), fh, indent=2)
 
 
 def main() -> None:

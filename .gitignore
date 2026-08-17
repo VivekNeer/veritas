@@ -25,3 +25,4 @@ Thumbs.db
 .pytest_cache/
 local_warehouse.db
 *.db
+run_summary.json

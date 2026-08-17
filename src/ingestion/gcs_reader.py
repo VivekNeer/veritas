@@ -39,6 +39,7 @@ class DeadLetter:
     document_id: str | None
     error_reason: str
     raw_json: str | None = None
+    source_system: str | None = None
     failed_at: str = field(default_factory=_now_iso)
 
 
@@ -91,14 +92,23 @@ def _extract_meta(document: dict, mapping: dict) -> dict:
     return meta
 
 
-def parse_envelope(document: dict, source_file: str, mapping: dict) -> tuple[list[RawRecord], list[DeadLetter]]:
+@dataclass
+class IngestStats:
+    files_read: int = 0
+    intra_file_duplicates: int = 0
+    cross_file_duplicates: int = 0
+
+
+def parse_envelope(document: dict, source_file: str, mapping: dict) -> tuple[list[RawRecord], list[DeadLetter], int]:
     """Parses one file's envelope and fans out its logical records.
 
-    Returns (records, dead_letters). Never raises — malformed structure
-    becomes a dead-letter entry so one bad file can't block a batch (NFR-3.1).
+    Returns (records, dead_letters, intra_file_duplicate_count). Never
+    raises — malformed structure becomes a dead-letter entry so one bad
+    file can't block a batch (NFR-3.1).
     """
     records: list[RawRecord] = []
     dead_letters: list[DeadLetter] = []
+    intra_file_duplicates = 0
 
     envelope = mapping["envelope"]
     identity = envelope["identity_map"]
@@ -114,9 +124,10 @@ def parse_envelope(document: dict, source_file: str, mapping: dict) -> tuple[lis
             error_reason=f"missing_or_malformed_{envelope['records_path'].replace('.', '_')}",
             raw_json=json.dumps(document, default=str)[:5000],
         ))
-        return records, dead_letters
+        return records, dead_letters, intra_file_duplicates
 
     meta = _extract_meta(document, mapping)
+    source_system = meta.get("source_system")
     profiles = mapping["profiles"]
     classifier_field = envelope["classifier_field"]
     payload_field = envelope["payload_field"]
@@ -130,6 +141,7 @@ def parse_envelope(document: dict, source_file: str, mapping: dict) -> tuple[lis
             dead_letters.append(DeadLetter(
                 source_file=source_file, document_id=document_id,
                 error_reason="response_detail_entry_not_an_object",
+                source_system=source_system,
             ))
             continue
 
@@ -142,6 +154,7 @@ def parse_envelope(document: dict, source_file: str, mapping: dict) -> tuple[lis
                 source_file=source_file, document_id=document_id,
                 error_reason=f"unknown_classifier:{classifier}",
                 raw_json=json.dumps(entry, default=str)[:5000],
+                source_system=source_system,
             ))
             continue
 
@@ -150,6 +163,7 @@ def parse_envelope(document: dict, source_file: str, mapping: dict) -> tuple[lis
                 source_file=source_file, document_id=document_id,
                 error_reason=f"record_status_not_success:{status}",
                 raw_json=json.dumps(entry, default=str)[:5000],
+                source_system=source_system,
             ))
             continue
 
@@ -162,6 +176,7 @@ def parse_envelope(document: dict, source_file: str, mapping: dict) -> tuple[lis
                     "correlation_id=%s intra_file_duplicate_suppressed classifier=%s",
                     correlation_id, classifier,
                 )
+                intra_file_duplicates += 1
                 continue
             seen_intra_file.add(key)
 
@@ -178,10 +193,10 @@ def parse_envelope(document: dict, source_file: str, mapping: dict) -> tuple[lis
             payload_hash=phash,
         ))
 
-    return records, dead_letters
+    return records, dead_letters, intra_file_duplicates
 
 
-def ingest(local_mode: bool, source: str) -> tuple[list[RawRecord], list[DeadLetter]]:
+def ingest(local_mode: bool, source: str) -> tuple[list[RawRecord], list[DeadLetter], IngestStats]:
     """Reads every JSON file from `source` (local folder or GCS bucket name),
     parses envelopes, fans out records, and applies cross-file dedup across
     the batch. Cross-*run* idempotency is the storage layer's job (deterministic
@@ -190,10 +205,12 @@ def ingest(local_mode: bool, source: str) -> tuple[list[RawRecord], list[DeadLet
     mapping = get_document_type_mappings()
     all_records: list[RawRecord] = []
     all_dead_letters: list[DeadLetter] = []
+    stats = IngestStats()
 
     file_iter = _iter_local_files(Path(source)) if local_mode else _iter_gcs_files(source)
 
     for source_file, raw_bytes in file_iter:
+        stats.files_read += 1
         try:
             document = json.loads(raw_bytes)
         except json.JSONDecodeError as e:
@@ -203,9 +220,10 @@ def ingest(local_mode: bool, source: str) -> tuple[list[RawRecord], list[DeadLet
             ))
             continue
 
-        records, dead_letters = parse_envelope(document, source_file, mapping)
+        records, dead_letters, intra_dupes = parse_envelope(document, source_file, mapping)
         all_records.extend(records)
         all_dead_letters.extend(dead_letters)
+        stats.intra_file_duplicates += intra_dupes
 
     # Cross-file dedup within this ingestion batch (FR-1.2, level 2).
     cross_cfg = mapping["deduplication"]["cross_file"]
@@ -219,10 +237,13 @@ def ingest(local_mode: bool, source: str) -> tuple[list[RawRecord], list[DeadLet
                     "correlation_id=%s cross_file_duplicate_suppressed document_id=%s",
                     r.correlation_id, r.document_id,
                 )
+                stats.cross_file_duplicates += 1
                 continue
             seen.add(key)
             deduped.append(r)
         all_records = deduped
 
-    logger.info("ingestion_complete records=%d dead_letters=%d", len(all_records), len(all_dead_letters))
-    return all_records, all_dead_letters
+    logger.info("ingestion_complete records=%d dead_letters=%d duplicates=%d",
+                len(all_records), len(all_dead_letters),
+                stats.intra_file_duplicates + stats.cross_file_duplicates)
+    return all_records, all_dead_letters, stats
