@@ -1,0 +1,279 @@
+# =============================================================================
+# document_type_mappings.yaml
+# =============================================================================
+# Maps incoming document shapes to the canonical schema WITHOUT code changes.
+# This file is the primary evidence for NFR-2.1 (zero-code onboarding) and
+# FR-1.3 (schema flexibility).
+#
+# The pipeline reads this at startup. Onboarding a new source = adding a
+# profile below. No Python is edited, no redeploy is required.
+#
+# NOTE ON THE ASSIGNMENT WORDING: the brief describes per-CLINIC variation.
+# The supplied sample data actually varies by document CLASSIFIER
+# (lab_report vs discharge_summary) under one shared envelope. This file is
+# therefore keyed on classifier, with an open-ended `source_profiles` block
+# proving the same mechanism absorbs genuine per-source variation when it
+# appears. See ASSUMPTIONS.md > Data Assumptions.
+# =============================================================================
+
+version: 1
+schema_version: "2026-08-16"
+
+# -----------------------------------------------------------------------------
+# ENVELOPE
+# Shared outer structure of every incoming file. Dotted paths are resolved
+# against the parsed JSON; missing paths yield null, never an exception.
+# -----------------------------------------------------------------------------
+envelope:
+  records_path: "data.responseDetails"      # list; fan out to N logical records
+  classifier_field: "classifier"            # selects the profile below
+  payload_field: "data"                     # per-record clinical payload
+  status_field: "status"
+  error_field: "errorMessage"
+
+  identity_map:
+    trace_id: "traceId"
+    correlation_id: "data.correlationId"
+    document_id: "data.documentId"
+    status_code: "statusCode"
+
+  # metaDetails is a list of {key, value} objects, not a dict.
+  # Keys are NOT consistent across files (case_id appears in file 5 only).
+  meta_details:
+    path: "data.metaDetails"
+    key_field: "key"
+    value_field: "value"
+    key_map:
+      DestinationIdentifier: destination_identifier
+      claim_no: claim_no
+      nt_code: nt_code
+      source_system: source_system
+      ConsumerClientId: consumer_client_id
+      case_id: case_id
+
+  # No clinic identifier exists anywhere in the payload. source_system
+  # (FASTTRACK, ARTEMIS) is the closest available proxy and is what per-source
+  # quality metrics (FR-5.4) group by. Documented in ASSUMPTIONS.md.
+  source_identity_field: source_system
+  source_identity_fallback: "UNKNOWN_SOURCE"
+
+# -----------------------------------------------------------------------------
+# DEDUPLICATION (FR-1.2 — "deduplication logic must be configurable")
+# Two independent levels. Both key sets are declared here, not hardcoded.
+# -----------------------------------------------------------------------------
+deduplication:
+  enabled: true
+
+  # Level 1 — within a single file. Sample_JSON_file5.json contains the SAME
+  # discharge_summary payload twice inside responseDetails.
+  intra_file:
+    enabled: true
+    strategy: payload_hash
+    keep: first
+
+  # Level 2 — across files and across re-runs. Yields a deterministic row id,
+  # which is what makes the BigQuery load idempotent (NFR-3.2).
+  cross_file:
+    enabled: true
+    strategy: composite_key
+    key_fields:
+      - document_id
+      - record_type
+      - payload_hash
+    on_conflict: skip          # skip | overwrite | version
+
+  # Row-grain key for the long-format output (one row per test result).
+  row_identity_fields:
+    - document_id
+    - record_type
+    - test_name_original
+    - page_no
+    - result_text
+
+# -----------------------------------------------------------------------------
+# PROFILE: lab_report
+# -----------------------------------------------------------------------------
+profiles:
+
+  lab_report:
+    description: "Pathology / lab result documents. Nested basic_info + report_details[]."
+    record_type: lab_report
+    emits_test_rows: true
+
+    header:
+      source_path: "basic_info"
+      field_map:
+        uhid: uhid
+        age: age_text
+        gender: gender
+        patient_name: patient_name
+        lab_or_hospital_name: lab_or_hospital_name
+        reports_date: reports_date
+        bill_date: bill_date
+
+    # One output row per element (long format, per Ourput-table-ideal-schema.csv)
+    line_items:
+      source_path: "report_details"
+      field_map:
+        test_name: test_name_original
+        result: result_text_original
+        range: range_text_original
+        unit: unit_original
+        page_no: page_no
+        test_analytics: source_test_analytics   # retained for comparison, NOT trusted
+
+    # Source-provided verdicts are placeholders or plain wrong in the samples
+    # ("normal" on out-of-range values, "low/normal/high" as literal text).
+    # We compute our own and report the disagreement rate in the UI.
+    trust_source_analytics: false
+
+  # ---------------------------------------------------------------------------
+  # PROFILE: discharge_summary
+  # ---------------------------------------------------------------------------
+  discharge_summary:
+    description: "Discharge documents. Flat camelCase + medication lists. No lab results."
+    record_type: discharge_summary
+    emits_test_rows: false
+
+    header:
+      source_path: ""                      # payload root
+      field_map:
+        admissionDate: admission_date
+        dischargeDate: discharge_date
+        age: age_text
+        gender: gender
+        patientName: patient_name
+        doctorName: doctor_name
+        hospitalName: hospital_name
+        hospitalAddress: hospital_address
+        ward: ward
+        diagnosis: diagnosis
+        briefHistory: brief_history
+        generalExaminations: general_examinations
+        recommendations: recommendations
+        postDischargeAdvice: post_discharge_advice
+        courseDuringHospitalisation: course_during_hospitalisation
+
+    medications:
+      source_path: "dischargeMedications"
+      field_map:
+        medicine: medicine
+        dose: dose
+        frequency: frequency
+        type: medicine_type
+
+    free_text_lists:
+      medicineInjectionsInvestigation: other_med_inj_investigations
+
+# -----------------------------------------------------------------------------
+# SOURCE-SPECIFIC OVERRIDES
+# Empty by design: the samples show no genuine per-source field divergence.
+# The mechanism is wired and tested so a real new source is a config-only
+# change. Demonstrates NFR-2.1 without fabricating clinic formats.
+# -----------------------------------------------------------------------------
+source_profiles:
+  FASTTRACK:
+    inherits: [lab_report, discharge_summary]
+    overrides: {}
+  ARTEMIS:
+    inherits: [lab_report, discharge_summary]
+    overrides: {}
+
+  # Worked example of onboarding a hypothetical new clinic, config-only.
+  # Disabled; kept as executable documentation for reviewers.
+  _EXAMPLE_NEW_CLINIC:
+    enabled: false
+    inherits: [lab_report]
+    overrides:
+      lab_report:
+        header:
+          source_path: "patient_details"
+          field_map:
+            patient_identifier: uhid
+            sex: gender
+            collected_on: reports_date
+        line_items:
+          source_path: "results"
+          field_map:
+            analyte: test_name_original
+            value: result_text_original
+            ref_interval: range_text_original
+            uom: unit_original
+
+# -----------------------------------------------------------------------------
+# JUNK / PLACEHOLDER DETECTION
+# Template rows shipped unfilled by the source system. Dropping these to the
+# dead-letter store keeps unusable rows out of the analytics table entirely.
+# -----------------------------------------------------------------------------
+junk_detection:
+  # Row is a template if the value equals its own field name.
+  self_referential_values:
+    test_name: ["test_name"]
+    result: ["result"]
+    range: ["range"]
+    unit: ["unit"]
+    test_analytics: ["low/normal/high"]
+
+  placeholder_dates: ["DD/MM/YYYY", "dd/mm/yyyy", "YYYY-MM-DD", ""]
+
+  # Non-clinical strings observed in test_name / unit fields — OCR bleed from
+  # letterheads, footers and column captions.
+  non_clinical_strings:
+    - "Expertise. Empowering you."
+    - "lac/cmm"        # a unit string that landed in the test_name column
+    - "9-11"           # a range that landed in the test_name column
+    - "DIAGNOSTICS"
+    - "Comment"
+    - "ABSENT"
+    - "NEGATIVE"
+
+  null_equivalents: ["", "N/A", "NA", "na", "NIL", "nil", "-", "--", "null", "None"]
+
+  drop_action: dead_letter
+  drop_reason: "template_placeholder_or_non_clinical_row"
+
+# -----------------------------------------------------------------------------
+# PII HANDLING (NFR-4.3)
+# Source data arrives pre-redacted. Never store the literal placeholder as a
+# value; store null plus a flag so redaction is visible in the output.
+# -----------------------------------------------------------------------------
+pii:
+  redaction_pattern: '^\[.*REDACTED.*\]$'
+  on_match:
+    store_value: null
+    set_flag: redacted
+  # Applied to any identifier arriving unredacted.
+  tokenise_fields: [patient_name, uhid, doctor_name, claim_no]
+  tokenisation_method: sha256_truncated_16
+  # Production: Cloud DLP de-identification templates. See architecture notes.
+
+# -----------------------------------------------------------------------------
+# SECTION-HEADER SUPPRESSION
+# Panel captions ("LIVER FUNCTION TEST (LFT), SERUM") appear as rows with no
+# result. They are structure, not measurements.
+# -----------------------------------------------------------------------------
+panel_headers:
+  suppress_when_result_empty: true
+  known_panels:
+    - "COMPLETE BLOOD COUNT (CBC) , WHOLE BLOOD EDTA"
+    - "CBC (Complete Blood Count)* (Specimen : EDTA)"
+    - "LIVER FUNCTION TEST (LFT) , SERUM"
+    - "LIVER FUNCTION TEST(LFT)"
+    - "LIVER FUNCTION TEST(LFT),SERUM"
+    - "LFT (Liver Function Test)"
+    - "RENAL PROFILE/KIDNEY FUNCTION TEST (RFT/KFT), SERUM"
+    - "COMPLETE URINE EXAMINATION (CUE)"
+    - "DIFFERENTIAL LEUCOCYTIC COUNT (DLC)"
+    - "Differential Leukocyte Counts"
+    - "BIOCHEMICAL EXAMINATION"
+    - "CENTRIFUGED SEDIMENT WET MOUNT AND MICROSCOPY"
+    - "WIDAL TEST (SLIDE METHOD)"
+    - "WIDAL TEST"
+    - "BC INDICES"
+    - "latelet Indices"
+    # Suffix-stripped forms. matching.preprocessing removes specimen suffixes
+    # before lookup, so both the raw and stripped forms must be listed.
+    - "COMPLETE BLOOD COUNT (CBC)"
+    - "LIVER FUNCTION TEST (LFT)"
+    - "RENAL PROFILE/KIDNEY FUNCTION TEST (RFT/KFT)"
+  action: flag_as_panel_header

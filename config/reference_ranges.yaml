@@ -1,0 +1,485 @@
+# =============================================================================
+# reference_ranges.yaml
+# =============================================================================
+# Medically accepted reference ranges (FR-3.1) and physiological plausibility
+# bounds (FR-3.2), keyed on canonical test names from test_dictionary.yaml.
+#
+# FOUR BOUNDS PER TEST — the distinction is the point of FR-3.2:
+#
+#   outlier_low .... low ......... high ........ outlier_high
+#        |            |             |                 |
+#   [ Outlier ][ Below Range ][Within Range][ Above Range ][ Outlier ]
+#
+#   low / high            -> clinically normal interval. Outside = abnormal
+#                            but real; a doctor acts on it.
+#   outlier_low / high    -> physiologically implausible. A haemoglobin of
+#                            0.1 or 999 is not a sick patient, it is bad data.
+#                            Different signal, different downstream action.
+#
+# ---------------------------------------------------------------------------
+# WHY CONFIG RANGES OVERRIDE SOURCE-PROVIDED RANGES
+# ---------------------------------------------------------------------------
+# The samples' own `range` field is unreliable: single values where an
+# interval is expected ("1.31"), ranges from a different analyte
+# ("4000-10000" on a haemoglobin row), and unfilled template text ("range").
+# Validation therefore uses this file as the authority. The original is
+# always retained in range_text_original, and disagreement between the two is
+# itself flagged as a quality signal. See ASSUMPTIONS.md.
+#
+# ---------------------------------------------------------------------------
+# SCOPE NOTE
+# ---------------------------------------------------------------------------
+# These are general adult reference intervals, sufficient for a prototype.
+# Production requires age-, sex- and method-stratified intervals sourced from
+# the performing laboratory, since intervals are assay-dependent and not
+# universally transferable. Several samples are paediatric, where adult
+# intervals genuinely do not apply — this is a stated limitation, not an
+# oversight. See ASSUMPTIONS.md > Data Assumptions.
+# =============================================================================
+
+version: 1
+population: adult_general
+units_note: "All bounds expressed in the canonical_unit from test_dictionary.yaml."
+
+# -----------------------------------------------------------------------------
+# CLASSIFICATION CASCADE (FR-3.3)
+# Evaluated top to bottom; first match wins. Order matters: an implausible
+# value must be caught as Outlier before it is reported as Above Range.
+# -----------------------------------------------------------------------------
+classification:
+  precedence:
+    - condition: is_template_or_junk_row
+      result: "Invalid"
+    - condition: test_name_unresolved
+      result: "Invalid"
+    - condition: unit_test_mismatch
+      result: "Invalid"
+    - condition: result_equals_range_text        # "1.5-4.5" leaked into result
+      result: "Invalid"
+    - condition: is_narrative_test
+      result: "Not Applicable"
+    - condition: is_qualitative_test
+      result: "Qualitative"
+    - condition: result_value_is_null
+      result: "Invalid"
+    - condition: no_reference_range_defined
+      result: "Invalid"
+    - condition: value_below_outlier_low
+      result: "Outlier"
+    - condition: value_above_outlier_high
+      result: "Outlier"
+    - condition: value_below_low
+      result: "Below Range"
+    - condition: value_above_high
+      result: "Above Range"
+    - condition: default
+      result: "Within Range"
+
+  # The brief's FR-3.3 enumerates five values. Two extra states are emitted
+  # for tests that are non-numeric BY DESIGN — marking a dengue antigen
+  # "Invalid" for not being a number would be wrong and would flood the ops
+  # queue with noise. Both are documented in ASSUMPTIONS.md.
+  permitted_values:
+    - "Within Range"
+    - "Above Range"
+    - "Below Range"
+    - "Outlier"
+    - "Invalid"
+    - "Qualitative"        # extension
+    - "Not Applicable"     # extension
+
+  boundary_handling: inclusive    # value == low or == high is Within Range
+
+# =============================================================================
+# RANGES
+# =============================================================================
+ranges:
+
+  # ------------------------------------------------------------- HAEMATOLOGY
+  HEMOGLOBIN:
+    unit: "g/dL"
+    low: 12.0
+    high: 16.0
+    outlier_low: 2.0
+    outlier_high: 25.0
+    # The brief's own FR-3.2 example: 0.1 and 999 must both land as Outlier.
+
+  WHITE_BLOOD_CELL_COUNT:
+    unit: "cells/cu.mm"
+    low: 4000
+    high: 11000
+    outlier_low: 100
+    outlier_high: 200000
+
+  RED_BLOOD_CELL_COUNT:
+    unit: "million/cu.mm"
+    low: 4.5
+    high: 5.5
+    outlier_low: 0.5
+    outlier_high: 12.0
+
+  PLATELET_COUNT:
+    unit: "lakhs/cu.mm"
+    low: 1.5
+    high: 4.5
+    outlier_low: 0.05
+    outlier_high: 30.0
+
+  HEMATOCRIT:
+    unit: "%"
+    low: 36.0
+    high: 46.0
+    outlier_low: 5.0
+    outlier_high: 75.0
+
+  MEAN_CELL_VOLUME:
+    unit: "fL"
+    low: 83.0
+    high: 101.0
+    outlier_low: 40.0
+    outlier_high: 150.0
+
+  MEAN_CELL_HEMOGLOBIN:
+    unit: "pg"
+    low: 27.0
+    high: 32.0
+    outlier_low: 10.0
+    outlier_high: 60.0
+
+  MEAN_CELL_HEMOGLOBIN_CONCENTRATION:
+    unit: "g/dL"
+    low: 31.5
+    high: 34.5
+    outlier_low: 20.0
+    outlier_high: 45.0
+
+  RDW_CV:
+    unit: "%"
+    low: 11.6
+    high: 14.0
+    outlier_low: 5.0
+    outlier_high: 40.0
+
+  RDW_SD:
+    unit: "fL"
+    low: 37.0
+    high: 54.0
+    outlier_low: 15.0
+    outlier_high: 120.0
+
+  MEAN_PLATELET_VOLUME:
+    unit: "fL"
+    low: 9.0
+    high: 13.0
+    outlier_low: 3.0
+    outlier_high: 30.0
+
+  NEUTROPHILS:
+    unit: "%"
+    low: 40.0
+    high: 70.0
+    outlier_low: 0.0
+    outlier_high: 100.0
+
+  LYMPHOCYTES:
+    unit: "%"
+    low: 20.0
+    high: 40.0
+    outlier_low: 0.0
+    outlier_high: 100.0
+
+  EOSINOPHILS:
+    unit: "%"
+    low: 1.0
+    high: 6.0
+    outlier_low: 0.0
+    outlier_high: 100.0
+
+  MONOCYTES:
+    unit: "%"
+    low: 2.0
+    high: 10.0
+    outlier_low: 0.0
+    outlier_high: 100.0
+
+  BASOPHILS:
+    unit: "%"
+    low: 0.0
+    high: 2.0
+    outlier_low: 0.0
+    outlier_high: 100.0
+
+  NEUTROPHIL_LYMPHOCYTE_RATIO:
+    unit: "ratio"
+    low: 1.0
+    high: 3.0
+    outlier_low: 0.0
+    outlier_high: 100.0
+
+  # ------------------------------------------------------------ RENAL / KFT
+  CREATININE:
+    unit: "mg/dL"
+    low: 0.6
+    high: 1.3
+    outlier_low: 0.05
+    outlier_high: 30.0
+
+  UREA:
+    unit: "mg/dL"
+    low: 15.0
+    high: 40.0
+    outlier_low: 1.0
+    outlier_high: 400.0
+
+  UREA_NITROGEN_BUN:
+    unit: "mg/dL"
+    low: 7.0
+    high: 20.0
+    outlier_low: 1.0
+    outlier_high: 200.0
+
+  EGFR:
+    unit: "mL/min/1.73m2"
+    low: 90.0
+    high: 200.0
+    outlier_low: 0.0
+    outlier_high: 300.0
+    note: "Below 90 is clinically meaningful staging, not merely 'low'."
+
+  URIC_ACID:
+    unit: "mg/dL"
+    low: 3.5
+    high: 7.2
+    outlier_low: 0.1
+    outlier_high: 30.0
+
+  # ------------------------------------------------------------ ELECTROLYTES
+  SODIUM:
+    unit: "mmol/L"
+    low: 135.0
+    high: 145.0
+    outlier_low: 90.0
+    outlier_high: 200.0
+
+  POTASSIUM:
+    unit: "mmol/L"
+    low: 3.5
+    high: 5.1
+    outlier_low: 1.0
+    outlier_high: 10.0
+
+  CHLORIDE:
+    unit: "mmol/L"
+    low: 98.0
+    high: 107.0
+    outlier_low: 60.0
+    outlier_high: 160.0
+
+  CALCIUM:
+    unit: "mg/dL"
+    low: 8.5
+    high: 10.5
+    outlier_low: 3.0
+    outlier_high: 20.0
+
+  PHOSPHORUS:
+    unit: "mg/dL"
+    low: 2.5
+    high: 4.5
+    outlier_low: 0.3
+    outlier_high: 20.0
+
+  # ------------------------------------------------------------- LIVER / LFT
+  ALANINE_AMINOTRANSFERASE:
+    unit: "U/L"
+    low: 7.0
+    high: 56.0
+    outlier_low: 0.0
+    outlier_high: 10000.0
+
+  ASPARTATE_AMINOTRANSFERASE:
+    unit: "U/L"
+    low: 10.0
+    high: 40.0
+    outlier_low: 0.0
+    outlier_high: 10000.0
+
+  AST_ALT_RATIO:
+    unit: "ratio"
+    low: 0.5
+    high: 1.5
+    outlier_low: 0.0
+    outlier_high: 50.0
+
+  ALKALINE_PHOSPHATASE:
+    unit: "U/L"
+    low: 44.0
+    high: 147.0
+    outlier_low: 0.0
+    outlier_high: 5000.0
+
+  GAMMA_GLUTAMYL_TRANSFERASE:
+    unit: "U/L"
+    low: 9.0
+    high: 48.0
+    outlier_low: 0.0
+    outlier_high: 5000.0
+
+  BILIRUBIN_TOTAL:
+    unit: "mg/dL"
+    low: 0.3
+    high: 1.2
+    outlier_low: 0.0
+    outlier_high: 60.0
+
+  BILIRUBIN_DIRECT:
+    unit: "mg/dL"
+    low: 0.0
+    high: 0.3
+    outlier_low: 0.0
+    outlier_high: 40.0
+
+  BILIRUBIN_INDIRECT:
+    unit: "mg/dL"
+    low: 0.1
+    high: 1.0
+    outlier_low: 0.0
+    outlier_high: 40.0
+
+  # ---------------------------------------------------------------- PROTEINS
+  ALBUMIN:
+    unit: "g/dL"
+    low: 3.5
+    high: 5.2
+    outlier_low: 0.5
+    outlier_high: 10.0
+
+  GLOBULIN:
+    unit: "g/dL"
+    low: 2.0
+    high: 3.5
+    outlier_low: 0.2
+    outlier_high: 12.0
+
+  TOTAL_PROTEIN:
+    unit: "g/dL"
+    low: 6.4
+    high: 8.3
+    outlier_low: 1.0
+    outlier_high: 15.0
+
+  ALBUMIN_GLOBULIN_RATIO:
+    unit: "ratio"
+    low: 1.0
+    high: 2.1
+    outlier_low: 0.05
+    outlier_high: 15.0
+
+  # -------------------------------------------------------------- PANCREATIC
+  AMYLASE:
+    unit: "U/L"
+    low: 25.0
+    high: 125.0
+    outlier_low: 0.0
+    outlier_high: 5000.0
+
+  LIPASE:
+    unit: "U/L"
+    low: 10.0
+    high: 140.0
+    outlier_low: 0.0
+    outlier_high: 10000.0
+
+  # ------------------------------------------------------------ INFLAMMATORY
+  C_REACTIVE_PROTEIN:
+    unit: "mg/L"
+    low: 0.0
+    high: 5.0
+    outlier_low: 0.0
+    outlier_high: 600.0
+
+  PROCALCITONIN:
+    unit: "ng/mL"
+    low: 0.0
+    high: 0.5
+    outlier_low: 0.0
+    outlier_high: 1000.0
+
+  # ---------------------------------------------------------------- METABOLIC
+  RANDOM_BLOOD_SUGAR:
+    unit: "mg/dL"
+    low: 70.0
+    high: 140.0
+    outlier_low: 10.0
+    outlier_high: 1500.0
+
+  # ------------------------------------------------------------------ VITALS
+  TEMPERATURE:
+    unit: "degree F"
+    low: 97.0
+    high: 99.5
+    outlier_low: 80.0
+    outlier_high: 115.0
+
+  PULSE_RATE:
+    unit: "/min"
+    low: 60.0
+    high: 100.0
+    outlier_low: 20.0
+    outlier_high: 300.0
+
+  RESPIRATORY_RATE:
+    unit: "/min"
+    low: 12.0
+    high: 20.0
+    outlier_low: 4.0
+    outlier_high: 80.0
+
+  OXYGEN_SATURATION:
+    unit: "%"
+    low: 95.0
+    high: 100.0
+    outlier_low: 40.0
+    outlier_high: 100.0
+
+  BLOOD_PRESSURE_SYSTOLIC:
+    unit: "mmHg"
+    low: 90.0
+    high: 120.0
+    outlier_low: 40.0
+    outlier_high: 300.0
+
+  BLOOD_PRESSURE_DIASTOLIC:
+    unit: "mmHg"
+    low: 60.0
+    high: 80.0
+    outlier_low: 20.0
+    outlier_high: 200.0
+
+# -----------------------------------------------------------------------------
+# SOURCE-RANGE COMPARISON
+# We validate against this file, but the source's own range is still parsed
+# into range_low / range_high and compared. Systematic disagreement for one
+# source is a strong upstream data-quality signal and appears in the UI's
+# per-source quality tab (FR-5.4).
+# -----------------------------------------------------------------------------
+source_range_comparison:
+  enabled: true
+  authority: config              # config | source
+  tolerance_pct: 10
+  on_disagreement:
+    flag: source_range_disagrees_with_canonical
+    action: flag_only            # never overwrite; both are retained
+  malformed_source_range:
+    single_value_pattern: '^\s*[\d.]+\s*$'      # "1.31" where an interval is due
+    flag: source_range_malformed
+
+# -----------------------------------------------------------------------------
+# DEFAULTS for canonical tests with no range defined here
+# -----------------------------------------------------------------------------
+defaults:
+  when_no_range_defined:
+    set_analytics: "Invalid"
+    flag: no_reference_range_configured
+    emit_to_review_queue: true
+    # Adding a range for a new test is a config-only change (NFR-2.1).

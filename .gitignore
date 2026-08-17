@@ -1,0 +1,25 @@
+# --- internal planning docs, not part of the submission ---
+docs/artifacts/
+
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# --- credentials / secrets ---
+.env
+*.json.key
+service-account*.json
+gcp-credentials*.json
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- local run artifacts ---
+*.log
+.pytest_cache/

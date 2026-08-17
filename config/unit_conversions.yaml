@@ -1,0 +1,287 @@
+# =============================================================================
+# unit_conversions.yaml
+# =============================================================================
+# Unit harmonisation (FR-2.4). Two layers:
+#
+#   1. ALIASES  - spelling / casing / OCR variants of the SAME unit.
+#                 No value change. e.g. gm/dl, g/dL, gm/di -> g/dL
+#   2. FACTORS  - genuinely different units for one analyte.
+#                 Value is multiplied. e.g. mil/cu.mm -> cells/cu.mm (x1e6)
+#
+# Every alias below was observed in the supplied sample files. The "gm/di",
+# "UIL", "FI" family are OCR misreads (l->i, U/L->UIL, fL->FI), not real units.
+# =============================================================================
+
+version: 1
+
+# -----------------------------------------------------------------------------
+# GLOBAL ALIASES — value-preserving normalisation, applied before factors
+# -----------------------------------------------------------------------------
+aliases:
+
+  "g/dL":
+    - "g/dL"
+    - "g/dl"
+    - "gm/dL"
+    - "gm/dl"
+    - "gm/di"          # OCR: l misread as i
+    - "G/DL"
+    - "gms/dl"
+
+  "mg/dL":
+    - "mg/dL"
+    - "mg/dl"
+    - "MG/DL"
+    - "mgs/dl"
+    - "mg/di"          # OCR
+
+  "U/L":
+    - "U/L"
+    - "u/l"
+    - "IU/L"
+    - "UIL"            # OCR: / misread as I
+    - "IL"             # OCR: U/L with U dropped
+    - "UA"             # OCR: U/L malformed
+    - "U/l"
+
+  "cells/cu.mm":
+    - "cells/cu.mm"
+    - "Cells/cu.mm"
+    - "cell/cu.mm"     # singular
+    - "cells/cumm"
+    - "cells/cu.cm"
+    - "/cu.mm"
+    - "cu.mm"
+
+  "million/cu.mm":
+    - "million/cu.mm"
+    - "Million/cu.mm"
+    - "million/cumm"
+    - "mill/cu.mm"
+
+  "lakhs/cu.mm":
+    - "lakhs/cu.mm"
+    - "lakhs/cumm"
+    - "lac/cmm"
+    - "lakh/cumm"
+
+  "fL":
+    - "fL"
+    - "fl"
+    - "FL"
+    - "FI"             # OCR: L misread as I
+    - "femtolitre"
+
+  "%":
+    - "%"
+    - "percent"
+    - "PERCENT"
+    - "pct"
+
+  "mmol/L":
+    - "mmol/L"
+    - "mmol/l"
+    - "mEq/L"          # numerically equivalent for monovalent electrolytes
+    - "meq/l"
+    - "MMOL/L"
+
+  "mg/L":
+    - "mg/L"
+    - "mg/l"
+    - "MG/L"
+
+  "ng/mL":
+    - "ng/mL"
+    - "ng/ml"
+    - "NG/ML"
+
+  "pg":
+    - "pg"
+    - "PG"
+    - "picogram"
+
+  "ratio":
+    - "ratio"
+    - "Ratio"
+    - "RATIO"
+    - ""               # ratios frequently ship with an empty unit
+
+  "mL/min/1.73m2":
+    - "mL/min/1.73m2"
+    - "ml/min/1.73m2"
+    - "mL/min/1.73 m2"
+    - "mL/min"
+
+  "/hpf":
+    - "/hpf"
+    - "/HPF"
+    - "per hpf"
+
+  "degree F":
+    - "degree F"
+    - "degrees F"
+    - "F"
+    - "°F"
+
+  "/min":
+    - "/min"
+    - "min"
+    - "per min"
+    - "bpm"
+
+  "mmHg":
+    - "mmHg"
+    - "mm Hg"
+    - "MMHG"
+
+# -----------------------------------------------------------------------------
+# PER-ANALYTE CONVERSION FACTORS — value-changing
+# result_value_canonical = result_value_original * factor
+# -----------------------------------------------------------------------------
+conversions:
+
+  WHITE_BLOOD_CELL_COUNT:
+    canonical_unit: "cells/cu.mm"
+    from:
+      "cells/cu.mm":   {factor: 1}
+      "mil/cu.mm":     {factor: 1000000}
+      "mil/cu.cm":     {factor: 1000000}    # the brief's own example
+      "million/cu.mm": {factor: 1000000}
+      "thousand/cu.mm": {factor: 1000}
+      "10^3/uL":       {factor: 1000}
+      "10^9/L":        {factor: 1000}
+
+  RED_BLOOD_CELL_COUNT:
+    canonical_unit: "million/cu.mm"
+    from:
+      "million/cu.mm": {factor: 1}
+      "cells/cu.mm":   {factor: 0.000001}
+      "10^12/L":       {factor: 1}
+      "10^6/uL":       {factor: 1}
+
+  PLATELET_COUNT:
+    canonical_unit: "lakhs/cu.mm"
+    from:
+      "lakhs/cu.mm":   {factor: 1}
+      "cells/cu.mm":   {factor: 0.00001}     # 1 lakh = 100,000
+      "thousand/cu.mm": {factor: 0.01}
+      "10^3/uL":       {factor: 0.01}
+      "10^9/L":        {factor: 0.01}
+
+  HEMOGLOBIN:
+    canonical_unit: "g/dL"
+    from:
+      "g/dL":   {factor: 1}
+      "g/L":    {factor: 0.1}
+      "mmol/L": {factor: 1.611}              # Hb-specific molar conversion
+
+  CREATININE:
+    canonical_unit: "mg/dL"
+    from:
+      "mg/dL":  {factor: 1}
+      "umol/L": {factor: 0.0113}
+      "µmol/L": {factor: 0.0113}
+
+  UREA:
+    canonical_unit: "mg/dL"
+    from:
+      "mg/dL":  {factor: 1}
+      "mmol/L": {factor: 6.006}
+
+  CALCIUM:
+    canonical_unit: "mg/dL"
+    from:
+      "mg/dL":  {factor: 1}
+      "mmol/L": {factor: 4.008}
+
+  URIC_ACID:
+    canonical_unit: "mg/dL"
+    from:
+      "mg/dL":  {factor: 1}
+      "umol/L": {factor: 0.0168}
+
+  C_REACTIVE_PROTEIN:
+    canonical_unit: "mg/L"
+    from:
+      "mg/L":  {factor: 1}
+      "mg/dL": {factor: 10}
+
+  BILIRUBIN_TOTAL:
+    canonical_unit: "mg/dL"
+    from:
+      "mg/dL":  {factor: 1}
+      "umol/L": {factor: 0.0585}
+
+# -----------------------------------------------------------------------------
+# INVALID UNIT DETECTION
+# The unit field in this dataset frequently contains something that is not a
+# unit at all — OCR bleed from adjacent columns, page footers, or letterheads.
+# -----------------------------------------------------------------------------
+invalid_units:
+
+  # Verbatim junk observed in the samples' unit field.
+  known_junk:
+    - "atelet Count"                 # a test name in the unit column
+    - "Expertise. Empowering you."   # lab letterhead tagline
+    - "unit"                         # unfilled template
+    - "AGGLUTINATION"                # a result, not a unit
+    - "NEGATIVE"
+    - "NOT DETECTED"
+    - "NIL"
+    - "ICT"
+    - "Od Units"
+    - "lac/cmm"                      # valid unit, but appeared AS a test name
+
+  # A range leaked into the unit column: "0-3", "0-1", "9-11"
+  range_like_pattern: '^\d+\s*-\s*\d+$'
+
+  # Multiple units concatenated into one field. Observed in the samples:
+  # "g/dL, %, cells/cu.mm, cells/cu.mm, %, %, ..." — an entire column of units
+  # collapsed into a single cell. Unrecoverable at row grain.
+  multi_unit_pattern: '^([^,]+,\s*){3,}'
+
+  action: null_and_flag
+  flag: invalid_unit
+  # Fall back to the canonical unit from test_dictionary.yaml so range
+  # validation can still proceed, and record that we did so.
+  fallback_to_canonical: true
+  fallback_flag: unit_assumed_canonical
+
+# -----------------------------------------------------------------------------
+# UNIT / TEST MISMATCH  ** IMPORTANT DESIGN DECISION **
+# -----------------------------------------------------------------------------
+# Some rows carry a unit and range belonging to a DIFFERENT analyte. Real
+# example from Sample_JSON_file2.json:
+#
+#     test_name: "aemoglobin"      -> resolves to HEMOGLOBIN (g/dL, 12-16)
+#     result:    "9700"
+#     range:     "4000-10000"
+#     unit:      "cell/cu.mm"
+#
+# That is a WBC count sitting on a haemoglobin row: the source system has
+# misaligned its columns.
+#
+# We FLAG rather than auto-correct. Inferring the "real" test from the unit
+# would mean silently rewriting a clinical record on a guess — and it would
+# destroy the evidence that the source system is broken. The whole point of
+# the platform is to surface upstream data quality, not launder it.
+#
+# Discussed further in ASSUMPTIONS.md > Data Assumptions.
+# -----------------------------------------------------------------------------
+mismatch_detection:
+  enabled: true
+  # Compare resolved canonical unit against the row's own unit family.
+  compare: [resolved_canonical_unit, unit_original_family]
+  on_mismatch:
+    set_analytics: "Invalid"
+    flag: unit_test_mismatch
+    retain_original: true
+    auto_correct: false        # deliberate. do not change.
+    emit_to_review_queue: true
+
+  # Corroborating signal: the row's stated range is nowhere near the canonical
+  # range for the resolved test. Raises confidence that columns are misaligned.
+  range_plausibility_check:
+    enabled: true
+    tolerance_multiple: 10     # >10x outside canonical bounds -> suspect
+    flag: range_implausible_for_test

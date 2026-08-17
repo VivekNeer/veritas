@@ -1,0 +1,662 @@
+# =============================================================================
+# test_dictionary.yaml
+# =============================================================================
+# Canonical test names and their known variants (FR-2.1).
+#
+# Resolution is three-tier, and the tier that fired is recorded on every row:
+#   1. exact      -> variant matched verbatim (after normalisation)   conf 1.00
+#   2. fuzzy      -> rapidfuzz score >= threshold                     conf score/100
+#   3. unresolved -> below threshold; canonical null, analytics Invalid
+# This populates normalization_method / normalization_confidence in the
+# output schema.
+#
+# -----------------------------------------------------------------------------
+# COLLISIONS IN THE SUPPLIED REFERENCE (Clinical_name_standardization.pdf)
+# -----------------------------------------------------------------------------
+# The supplied dictionary is internally inconsistent and has been reconciled
+# here rather than propagated:
+#
+#   * HAEMOGLOBIN and HEMOGLOBIN listed as SEPARATE canonical names, BOTH
+#     claiming "Hb" as a variant -> ambiguous mapping. Merged into one
+#     canonical entry (HEMOGLOBIN); British spelling is a variant, not a
+#     separate analyte.
+#   * CREATININE and "Serum Creatinine" listed separately -> same analyte,
+#     specimen qualifier only. Merged into CREATININE.
+#   * Casing is mixed (SODIUM vs Platelet Count). Normalised to UPPER
+#     throughout for consistent grouping.
+#
+# Production would resolve against LOINC rather than an ad-hoc dictionary.
+# See ASSUMPTIONS.md > Data Assumptions.
+# =============================================================================
+
+version: 1
+
+matching:
+  fuzzy_threshold: 85              # rapidfuzz score below which -> unresolved
+  fuzzy_scorer: token_set_ratio    # tolerates reordering and extra qualifiers
+  case_sensitive: false
+
+  # Applied before matching. Critical for this dataset: method annotations
+  # ("(whole blood/photometric method)") otherwise dominate the score.
+  preprocessing:
+    strip_whitespace: true
+    collapse_internal_spaces: true
+    strip_trailing_punctuation: true
+    strip_specimen_suffixes: [", SERUM", ", WHOLE BLOOD EDTA", ", RANDOM", " SERUM"]
+    strip_method_annotations: true
+    method_annotation_pattern: '\((whole blood|automated|light microscopy|visual observation|calculated|calculalod|impedence|impedenco|photometric|multistrips)[^)]*\)'
+
+  # Test names carrying their own result: "Na + (127)", "KFT - sr creatinine - 0.3"
+  embedded_value_extraction:
+    enabled: true
+    patterns:
+      - '^(?P<name>[^(]+)\((?P<value>[\d.]+)\)$'      # Na + (127)
+      - '^(?P<name>.+?)\s*-\s*(?P<value>[\d.]+)$'      # KFT - sr creatinine - 0.3
+    # Only used when the row's own result field is empty.
+    use_when_result_empty: true
+    set_method: extracted
+    set_confidence: 0.70
+    flag: value_recovered_from_test_name
+
+  # Multi-analyte strings: "LFT ( SGOT - 38, SGPT -14, ALP - 127)"
+  composite_row_detection:
+    enabled: true
+    min_embedded_values: 2
+    action: flag_only          # do not split; flag for ops review
+    flag: composite_multi_analyte_row
+
+# =============================================================================
+# CANONICAL TESTS
+# Variants below are drawn from BOTH the supplied reference dictionary AND the
+# actual strings observed across the 5 sample files (203 distinct test names).
+# Truncated variants (aemoglobin, tal WBC Count) are OCR artefacts and are the
+# clearest demonstration of fuzzy matching earning its place.
+# =============================================================================
+tests:
+
+  # --------------------------------------------------------------- HAEMATOLOGY
+  HEMOGLOBIN:
+    canonical_unit: "g/dL"
+    category: haematology
+    variants:
+      - "HEMOGLOBIN"
+      - "HAEMOGLOBIN"
+      - "Haemoglobin"
+      - "haemoglobin"
+      - "Hb"
+      - "HB"
+      - "HGB"
+      - "aemoglobin"                                    # OCR truncation
+      - "Haemoglobin (whole blood/photometric method)"
+
+  WHITE_BLOOD_CELL_COUNT:
+    canonical_unit: "cells/cu.mm"
+    category: haematology
+    variants:
+      - "WHITE BLOOD CELL COUNT"
+      - "TOTAL WBC COUNT"
+      - "Total WBC Count"
+      - "WBC COUNT"
+      - "WBC"
+      - "TOTAL LEUCOCYTE COUNT (TLC)"
+      - "Total Leucocyte Count (TLC)"
+      - "TLC"
+      - "CORRECTED TLC"
+      - "ABSOLUTE LEUCOCYTE COUNT"
+      - "tal WBC Count"                                 # OCR truncation
+      - "Total Leucocyte Count (TLC) (whole blood/impedence method)"
+
+  RED_BLOOD_CELL_COUNT:
+    canonical_unit: "million/cu.mm"
+    category: haematology
+    variants:
+      - "RED BLOOD CELL COUNT"
+      - "Red Blood Cell Count (RBC)"
+      - "Red Blood Cell Count"
+      - "RBC COUNT"
+      - "RBC"
+      - "Red Blood Cell Count (whole blood/ impedenco method)"
+
+  PLATELET_COUNT:
+    canonical_unit: "lakhs/cu.mm"
+    category: haematology
+    variants:
+      - "PLATELET COUNT"
+      - "Platelet Count"
+      - "atelet Count"                                  # OCR truncation
+      - "PLT"
+
+  HEMATOCRIT:
+    canonical_unit: "%"
+    category: haematology
+    variants:
+      - "HEMATOCRIT"
+      - "HAEMATOCRIT"
+      - "Haematocrit (PCV)"
+      - "PCV"
+      - "Packed Cell Volume (PCV)"
+      - "HCT"
+      - "ematocrit HCT"                                 # OCR truncation
+      - "Packed Cell Volume (PCV) (whole blood/ impedenco method)"
+
+  MEAN_CELL_VOLUME:
+    canonical_unit: "fL"
+    category: haematology
+    variants:
+      - "MCV"
+      - "Mean Cell Volume (MCV)"
+      - "MEAN CORPUSCULAR VOLUME"
+      - "lean Corp Volume MCV"                          # OCR truncation
+      - "Mean Cell Volume (MCV) (whole blood/calculalod)"
+
+  MEAN_CELL_HEMOGLOBIN:
+    canonical_unit: "pg"
+    category: haematology
+    variants: ["MCH", "MEAN CORPUSCULAR HAEMOGLOBIN", "MCH (whole blood/calculated)"]
+
+  MEAN_CELL_HEMOGLOBIN_CONCENTRATION:
+    canonical_unit: "g/dL"
+    category: haematology
+    variants:
+      - "MCHC"
+      - "MEAN CORPUSCULAR HAEMOGLOBIN CONCENTRATION"
+      - "lean Corp Hb Conc MCHC"                        # OCR truncation
+      - "MCHC (whole blood/calculated)"
+
+  RDW_CV:
+    canonical_unit: "%"
+    category: haematology
+    variants:
+      - "RDW-CV"
+      - "RDW - CV"
+      - "DW-CV"                                         # OCR truncation
+      - "R.D.W"
+      - "RDW"
+      - "RDW - CV (whole blood/impedence method)"
+
+  RDW_SD:
+    canonical_unit: "fL"
+    category: haematology
+    variants: ["RDW-SD", "RDW - SD", "DW-SD"]
+
+  MEAN_PLATELET_VOLUME:
+    canonical_unit: "fL"
+    category: haematology
+    variants: ["MPV", "MPV (Mean Platelet Volume)", "MEAN PLATELET VOLUME"]
+
+  NEUTROPHILS:
+    canonical_unit: "%"
+    category: differential_count
+    variants: ["NEUTROPHILS", "Neutrophil", "eutrophils", "NEUTROPHIL"]
+
+  LYMPHOCYTES:
+    canonical_unit: "%"
+    category: differential_count
+    variants: ["LYMPHOCYTES", "Lymphocyte", "mphocytes", "LYMPHOCYTE"]
+
+  EOSINOPHILS:
+    canonical_unit: "%"
+    category: differential_count
+    variants: ["EOSINOPHILS", "Eosinophils", "sinophils", "EOSINOPHIL"]
+
+  MONOCYTES:
+    canonical_unit: "%"
+    category: differential_count
+    variants: ["MONOCYTES", "Monocytes", "onocytes", "MONOCYTE"]
+
+  BASOPHILS:
+    canonical_unit: "%"
+    category: differential_count
+    variants: ["BASOPHILS", "Basophils", "sophils", "BASOPHIL"]
+
+  NEUTROPHIL_LYMPHOCYTE_RATIO:
+    canonical_unit: "ratio"
+    category: differential_count
+    variants: ["Neutrophil lymphocyte ratio (NLR)", "NLR"]
+
+  PLATELETCRIT:
+    canonical_unit: "%"
+    category: haematology
+    variants: ["PCT (Plateletcrit)", "PLATELETCRIT", "ET"]   # "ET" = OCR of PCT
+
+  PLATELET_LARGE_CELL_RATIO:
+    canonical_unit: "%"
+    category: haematology
+    variants: ["P-LCR", "PLCR", "LCR", "Platelet Large Cell Ratio"]
+
+  PLATELET_DISTRIBUTION_WIDTH:
+    canonical_unit: "fL"
+    category: haematology
+    variants: ["PDW", "Platelet Distribution Width"]
+
+  # -------------------------------------------------------------- RENAL / KFT
+  CREATININE:
+    canonical_unit: "mg/dL"
+    category: renal
+    variants:
+      - "CREATININE"
+      - "Creatinine"
+      - "Serum Creatinine"
+      - "SERUM CREATININE"
+      - "CREATININE, SERUM"
+      - "sr creatinine"
+
+  UREA:
+    canonical_unit: "mg/dL"
+    category: renal
+    variants: ["UREA", "Blood Urea", "BLOOD UREA", "Urea"]
+
+  UREA_NITROGEN_BUN:
+    canonical_unit: "mg/dL"
+    category: renal
+    variants: ["Urea Nitrogen (BUN)", "BLOOD UREA NITROGEN", "BUN"]
+
+  EGFR:
+    canonical_unit: "mL/min/1.73m2"
+    category: renal
+    variants:
+      - "eGFR"
+      - "Estimated Glomerular Filtration Rate (eGFR)"
+      - "eGFR - ESTIMATED GLOMERULAR FILTRATION RATE"
+      - "eGFR - ESTIMATED GLOMERULAR"                   # split across lines
+      - "FILTRATION RATE"                               # orphaned continuation
+      - "ESTIMATED GLOMERULAR FILTRATION RATE"
+
+  URIC_ACID:
+    canonical_unit: "mg/dL"
+    category: renal
+    variants: ["URIC ACID", "Uric Acid", "URIC ACID, SERUM"]
+
+  # ------------------------------------------------------------- ELECTROLYTES
+  SODIUM:
+    canonical_unit: "mmol/L"
+    category: electrolytes
+    variants: ["SODIUM", "Sodium", "Na+", "Sodium (Na+)", "Na", "Na +"]
+
+  POTASSIUM:
+    canonical_unit: "mmol/L"
+    category: electrolytes
+    variants: ["POTASSIUM", "Potassium", "K+", "Potassium (K+)", "K"]
+
+  CHLORIDE:
+    canonical_unit: "mmol/L"
+    category: electrolytes
+    variants: ["CHLORIDE", "Chloride", "Cl-", "Chloride (CI-)", "Chloride (Cl-)"]
+
+  CALCIUM:
+    canonical_unit: "mg/dL"
+    category: electrolytes
+    variants: ["CALCIUM", "Calcium", "Ca2+ (Calcium)", "Serum Calcium", "CALCIUM, SERUM"]
+
+  PHOSPHORUS:
+    canonical_unit: "mg/dL"
+    category: electrolytes
+    variants: ["PHOSPHORUS, INORGANIC", "Phosphorus Serum", "PHOSPHORUS", "Phosphorus"]
+
+  # ---------------------------------------------------------------- LIVER/LFT
+  ALANINE_AMINOTRANSFERASE:
+    canonical_unit: "U/L"
+    category: liver
+    variants:
+      - "ALANINE AMINOTRANSFERASE"
+      - "ALT (SGPT)"
+      - "ALT"
+      - "SGPT"
+      - "ALANINE AMINOTRANSFERASE(ALT/SGPT)"
+      - "ALANINE AMINOTRANSFERASE (ALT/SGPT)"
+      - "Alanine Transaminase (ALT)"
+
+  ASPARTATE_AMINOTRANSFERASE:
+    canonical_unit: "U/L"
+    category: liver
+    variants:
+      - "ASPARTATE AMINOTRANSFERASE"
+      - "AST (SGOT)"
+      - "AST"
+      - "SGOT"
+      - "ASPARTATE AMINOTRANSFERASE(AST/SGOT)"
+      - "ASPARTATE AMINOTRANSFERASE (AST/SGOT)"
+      - "Aspartate Transaminase (SGOT, HAST)"
+
+  AST_ALT_RATIO:
+    canonical_unit: "ratio"
+    category: liver
+    variants:
+      - "AST (SGOT) / ALT (SGPT) RATIO (DERITIS)"
+      - "AST (SGOT) / ALT (SGPT) RATIO (DE RITIS)"
+      - "AST(SGOT)/ALT(SGPT)RATIO(DERITIS)"
+      - "DE RITIS RATIO"
+
+  ALKALINE_PHOSPHATASE:
+    canonical_unit: "U/L"
+    category: liver
+    variants: ["ALKALINE PHOSPHATASE", "Alkaline Phosphatase (ALP)", "ALP"]
+
+  GAMMA_GLUTAMYL_TRANSFERASE:
+    canonical_unit: "U/L"
+    category: liver
+    variants: ["GGT (Gamma Glutamyl Transpeptidase)", "GGT", "GAMMA GLUTAMYL TRANSFERASE"]
+
+  BILIRUBIN_TOTAL:
+    canonical_unit: "mg/dL"
+    category: liver
+    variants:
+      - "BILIRUBIN, TOTAL"
+      - "Serum Bilirubin (Total, Direct & Indirect)"
+      - "TOTAL BILIRUBIN"
+      - "BILIRUBIN TOTAL"
+
+  BILIRUBIN_DIRECT:
+    canonical_unit: "mg/dL"
+    category: liver
+    variants:
+      - "BILIRUBIN CONJUGATED(DIRECT)"
+      - "BILIRUBIN CONJUGATED (DIRECT)"
+      - "DIRECT BILIRUBIN"
+      - "BILIRUBIN CONJUGATED"
+
+  BILIRUBIN_INDIRECT:
+    canonical_unit: "mg/dL"
+    category: liver
+    variants: ["BILIRUBIN(INDIRECT)", "BILIRUBIN (INDIRECT)", "INDIRECT BILIRUBIN"]
+
+  # --------------------------------------------------------------- PROTEINS
+  ALBUMIN:
+    canonical_unit: "g/dL"
+    category: proteins
+    variants: ["ALBUMIN", "Albumin", "ALBUMIN, SERUM", "Serum Albumin"]
+
+  GLOBULIN:
+    canonical_unit: "g/dL"
+    category: proteins
+    variants: ["GLOBULIN", "Globulin (Calculated)", "Globulin"]
+
+  TOTAL_PROTEIN:
+    canonical_unit: "g/dL"
+    category: proteins
+    variants: ["PROTEIN, TOTAL", "PROTEIN,TOTAL", "Total protein", "Total Protein", "TOTAL PROTEIN"]
+
+  ALBUMIN_GLOBULIN_RATIO:
+    canonical_unit: "ratio"
+    category: proteins
+    variants:
+      - "A/G RATIO"
+      - "Albumin/Globulin Ratio"
+      - "Albumin/Globulin Ratio (Calculated)"
+      - "AG RATIO"
+
+  # ------------------------------------------------------------ PANCREATIC
+  AMYLASE:
+    canonical_unit: "U/L"
+    category: pancreatic
+    variants: ["AMYLASE", "Amylase", "SERUM AMYLASE"]
+
+  LIPASE:
+    canonical_unit: "U/L"
+    category: pancreatic
+    variants: ["LIPASE,SERUM", "LIPASE, SERUM", "LIPASE", "Lipase"]
+
+  # ------------------------------------------------------- INFLAMMATORY
+  C_REACTIVE_PROTEIN:
+    canonical_unit: "mg/L"
+    category: inflammatory
+    variants: ["C-REACTIVE PROTEIN", "C-REACTIVE PROTEIN (CRP)", "CRP", "CRP-QUANTITATIVE"]
+
+  PROCALCITONIN:
+    canonical_unit: "ng/mL"
+    category: inflammatory
+    variants: ["PROCALCITONIN", "PROCALCITONIN (PCT)", "PCT"]
+
+  # --------------------------------------------------------------- GLUCOSE
+  RANDOM_BLOOD_SUGAR:
+    canonical_unit: "mg/dL"
+    category: metabolic
+    variants: ["RBS", "RANDOM BLOOD SUGAR", "Random Blood Sugar", "BLOOD SUGAR RANDOM"]
+
+  # ------------------------------------------------------------- URINALYSIS
+  # The complete urine examination panel appears in several samples, heavily
+  # annotated with method descriptions. Method annotations are stripped by
+  # matching.preprocessing before lookup.
+  URINE_PH:
+    canonical_unit: "pH"
+    category: urinalysis
+    variants:
+      - "pH"
+      - "URINE pH"
+      - "pH(automated multistrips double indicator method)"
+
+  URINE_SPECIFIC_GRAVITY:
+    canonical_unit: "specific gravity"
+    category: urinalysis
+    variants:
+      - "SP. GRAVITY"
+      - "SPECIFIC GRAVITY"
+      - "URINE SPECIFIC GRAVITY"
+      - "SPECIFIC GRAVITY(automated multistrips.colour reaction/Pka change)"
+
+  URINE_PROTEIN:
+    canonical_unit: "qualitative"
+    category: urinalysis
+    variants:
+      - "URINE PROTEIN"
+      - "PROTEIN (ALBUMIN)"
+      - "PROTEIN (ALBUMIN)automated(multistrips)protein error of pH).sulphosalicylic acid method"
+
+  URINE_GLUCOSE:
+    canonical_unit: "qualitative"
+    category: urinalysis
+    variants:
+      - "URINE GLUCOSE"
+      - "GLUCOSE"
+      - "GLUCOSE(automated multistrips.(enzyme 0 reaction) benedicts method"
+
+  URINE_KETONES:
+    canonical_unit: "qualitative"
+    category: urinalysis
+    variants:
+      - "URINE KETONES (RANDOM)"
+      - "URINE KETONES"
+      - "KETONE BODIES"
+      - "KETONE BODIES(automated (multistrips.rotheras method)"
+
+  URINE_BILIRUBIN:
+    canonical_unit: "qualitative"
+    category: urinalysis
+    variants:
+      - "URINE BILIRUBIN"
+      - "BILIRUBIN(automated multistrips,fouchets method)"
+
+  URINE_UROBILINOGEN:
+    canonical_unit: "qualitative"
+    category: urinalysis
+    variants:
+      - "UROBILINOGEN"
+      - "URINE UROBILINOGEN"
+      - "UROBILINOGEN(automated multistrips,ehrlichs aldehyde method)"
+
+  URINE_NITRITE:
+    canonical_unit: "qualitative"
+    category: urinalysis
+    variants: ["NITRITE", "URINE NITRITE"]
+
+  URINE_LEUCOCYTE_ESTERASE:
+    canonical_unit: "qualitative"
+    category: urinalysis
+    variants: ["LEUCOCYTE ESTERASE", "LEUKOCYTE ESTERASE", "URINE LEUCOCYTE ESTERASE"]
+
+  URINE_BLOOD:
+    canonical_unit: "qualitative"
+    category: urinalysis
+    variants: ["URINE BLOOD", "BLOOD(automated multistrips ,bencidine method)"]
+
+  URINE_PUS_CELLS:
+    canonical_unit: "/hpf"
+    category: urinalysis
+    variants: ["Pus Cells", "PUS CELLS", "PUS CELLS(light microscopy)/hpf"]
+
+  URINE_RED_BLOOD_CELLS:
+    canonical_unit: "/hpf"
+    category: urinalysis
+    variants: ["RED BLOOD CELLS(light microscopy)", "URINE RBC", "RBCs (urine)"]
+
+  URINE_EPITHELIAL_CELLS:
+    canonical_unit: "/hpf"
+    category: urinalysis
+    variants: ["EPITHELIAL CELLS", "EPITHELIAL CELLS(light microscopy)"]
+
+  URINE_CASTS:
+    canonical_unit: "/hpf"
+    category: urinalysis
+    variants: ["CASTS", "CASTS(light microscopy)", "URINE CASTS"]
+
+  URINE_OTHERS:
+    canonical_unit: "qualitative"
+    category: urinalysis
+    variants: ["OTHERS", "OTHERS(light microscopy", "OTHERS (light microscopy)"]
+
+  URINE_CRYSTALS:
+    canonical_unit: "/hpf"
+    category: urinalysis
+    variants: ["CRYSTALS", "CRYSTALS(light microscopy)", "URINE CRYSTALS"]
+
+  URINE_VOLUME:
+    canonical_unit: "mL"
+    category: urinalysis
+    variants: ["VOLUME", "VOLUME(visual observation)", "URINE VOLUME"]
+
+  URINE_COLOUR:
+    canonical_unit: "qualitative"
+    category: urinalysis
+    variants: ["COLOUR", "COLOR", "COLOUR(visual observation)"]
+
+  URINE_TRANSPARENCY:
+    canonical_unit: "qualitative"
+    category: urinalysis
+    variants:
+      - "TRANSPARENCY"
+      - "APPEARANCE"
+      - "TRANSPARENCY (APPEARANCE)( visual observation)"
+
+  # ---------------------------------------------------------------- VITALS
+  # Present in the samples (file 5) as free-text vitals. Included so they
+  # resolve rather than polluting the unresolved queue.
+  TEMPERATURE:
+    canonical_unit: "degree F"
+    category: vitals
+    variants: ["Temp", "Temp.", "TEMPERATURE", "Temperature"]
+
+  PULSE_RATE:
+    canonical_unit: "/min"
+    category: vitals
+    variants: ["Pulse", "PULSE", "Heart Rate", "Heart Rate®", "HR"]
+
+  RESPIRATORY_RATE:
+    canonical_unit: "/min"
+    category: vitals
+    variants: ["Resp. Rate", "RESPIRATORY RATE", "RR"]
+
+  OXYGEN_SATURATION:
+    canonical_unit: "%"
+    category: vitals
+    variants: ["SPO2", "SpO2", "SPO2%", "Oxygen Saturation"]
+
+  # Compound field: "100/60 mmHg". Split into two canonical tests rather than
+  # coerced to a single float. See numeric_converter compound handling.
+  BLOOD_PRESSURE_SYSTOLIC:
+    canonical_unit: "mmHg"
+    category: vitals
+    variants: ["BP Systolic", "SYSTOLIC BP", "SBP"]
+    derived_from: {source_variant: "BP", component: systolic, delimiter: "/"}
+
+  BLOOD_PRESSURE_DIASTOLIC:
+    canonical_unit: "mmHg"
+    category: vitals
+    variants: ["BP Diastolic", "DIASTOLIC BP", "DBP"]
+    derived_from: {source_variant: "BP", component: diastolic, delimiter: "/"}
+
+# =============================================================================
+# QUALITATIVE TESTS
+# Non-numeric by nature. Must NOT be classified Invalid merely for lacking a
+# numeric result — FR-3.4 targets numeric-expected fields, not these.
+# =============================================================================
+qualitative_tests:
+  expected_values: ["POSITIVE", "NEGATIVE", "REACTIVE", "NON-REACTIVE",
+                    "DETECTED", "NOT DETECTED", "PRESENT", "ABSENT",
+                    "NIL", "TRACE", "NORMAL", "ABNORMAL"]
+  tests:
+    DENGUE_NS1:
+      variants: ["DENGUE NS 1", "DENGUE NS1", "NS1 ANTIGEN"]
+    MALARIA_VIVAX_ANTIGEN:
+      variants: ["MALARIA VIVAX ANTIGEN , WHOLE BLOOD EDTA", "MALARIA VIVAX ANTIGEN"]
+    MALARIA_FALCIPARUM_ANTIGEN:
+      variants: ["MALARIA FALCIPARUM ANTIGEN , WHOLE BLOOD EDTA", "MALARIA FALCIPARUM ANTIGEN"]
+    PERIPHERAL_SMEAR_MALARIAL_PARASITE:
+      variants: ["PERIPHERAL SMEAR FOR MALARIAL PARASITE (MP) , WHOLE BLOOD EDTA"]
+    TYPHIDOT_IGG_IGM:
+      variants: ["TYPHIDOT IgG AND IgM , SERUM", "TYPHIDOT IgG AND IgM, SERUM",
+                 "TYPHI DOT IGG & IGM", "TYPHIDOT"]
+    SALMONELLA_TYPHI_O:
+      variants: ["SALMONELLA TYPHI O` , SERUM", "SALMONELLA TYPHI O"]
+    SALMONELLA_TYPHI_H:
+      variants: ["SALMONELLA TYPHI 'H' , SERUM", "SALMONELLA TYPHI H"]
+    SALMONELLA_PARATYPHI_AH:
+      variants: ["S.PARATYPHI A 'H' , SERUM", "S.PARATYPHI A H"]
+    SALMONELLA_PARATYPHI_BH:
+      variants: ["S.PARATYPHI B 'H' , SERUM", "S.PARATYPHI B H"]
+    BLOOD_CULTURE:
+      variants: ["CULTURE AND SENSITIVITY - AEROBIC (BLOOD)", "BLOOD CULTURE"]
+    URINE_ROUTINE:
+      variants: ["Urine routine and microscopic examination", "urine R/M",
+                 "COMPLETE URINE EXAMINATION (CUE)", "URINE R/M"]
+
+# =============================================================================
+# IMAGING / NARRATIVE
+# Free-text findings. Retained in result_text; never numeric.
+# =============================================================================
+narrative_tests:
+  # Imaging and examination findings
+  variants:
+    - "ULTRASOUND WHOLE ABDOMEN"
+    - "USG WHOLE ABDOMEN"
+    - "USG W/A"
+    - "Chest"
+    - "CVS"
+    - "P/A"
+    - "Diet"
+    - "Comment"
+    - "DIAGNOSTICS"
+
+  # Presenting symptoms recorded in the observation chart, not measurements.
+  symptoms:
+    - "Fever"
+    - "Vomiting"
+    - "Headache"
+    - "Pain abdomen"
+    - "Reduced oral intake"
+    - "Generalized weakness"
+
+  # Nursing observation-chart items. Numeric, but with no clinical reference
+  # interval — classified Not Applicable rather than Invalid so they do not
+  # flood the ops review queue.
+  nursing_chart:
+    - "Total Intake"
+    - "Total Output"
+    - "Weight"
+    - "Supplement 0,Lt."
+    - "BE"
+
+  analytics_override: "Not Applicable"
+
+# =============================================================================
+# UNRESOLVED HANDLING (feeds NFR-4.1: >=98% variant coverage)
+# =============================================================================
+unresolved_handling:
+  action: flag_and_retain          # never silently drop
+  set_canonical: null
+  set_analytics: "Invalid"
+  set_method: "unresolved"
+  record_best_candidate: true      # store nearest match + score for ops triage
+  emit_to_review_queue: true
+  # Ops review of this queue -> dictionary update -> re-run is the production
+  # loop that reaches the 98% coverage target. Vertex AI text embeddings would
+  # replace the fuzzy tier at scale; see architecture notes.
