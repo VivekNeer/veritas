@@ -8,6 +8,7 @@ rather than generating its own.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -86,6 +87,11 @@ CANONICAL_COLUMNS = [
     "course_during_hospitalisation",
     # medication (discharge_summary rows only)
     "medicine", "dose", "frequency", "medicine_type", "other_med_inj_investigations",
+    # audit trail (FR-4.3) — the full classifier payload this record came
+    # from, so any row's decision can be traced back to source without
+    # re-opening the original file. Duplicated per row of the same record;
+    # a real BigQuery table absorbs this trivially at this data volume.
+    "raw_json",
 ]
 
 
@@ -139,6 +145,7 @@ class Pipeline:
             "destination_identifier": meta.get("destination_identifier"),
             "case_id": meta.get("case_id"),
             "ingested_at": r.ingested_at,
+            "raw_json": json.dumps(r.payload, default=str),
         }
 
     def _normalise_demographics(self, header: dict) -> dict:
