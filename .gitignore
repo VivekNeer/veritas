@@ -19,6 +19,7 @@ gcp-credentials*.json
 Thumbs.db
 .vscode/
 .idea/
+.claude/
 
 # --- local run artifacts ---
 *.log
