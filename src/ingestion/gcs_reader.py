@@ -19,24 +19,13 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from src.config_loader import get_document_type_mappings
+from src.path_utils import get_path as _get_path
 
 logger = logging.getLogger("veritas.ingestion")
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _get_path(obj: Any, dotted_path: str) -> Any:
-    """Resolve a dotted path against a nested dict. Missing -> None, never raises."""
-    if dotted_path == "":
-        return obj
-    cur = obj
-    for part in dotted_path.split("."):
-        if not isinstance(cur, dict) or part not in cur:
-            return None
-        cur = cur[part]
-    return cur
 
 
 def _payload_hash(payload: Any) -> str:
